@@ -62,9 +62,13 @@
 
 /** Telephone Status (0x17) response byte 1: which physical adapter the
  * response identifies as (independent of the MAGB_DEVICE_ADAPTER_* id
- * captured during Begin Session). */
-#define MAGB_PHONE_ADAPTER_BLUE_OR_RED 0x4DU
-#define MAGB_PHONE_ADAPTER_YELLOW      0x48U
+ * captured during Begin Session). Meaning of the value itself is
+ * otherwise undocumented; only these three observed values are known
+ * (Dan Docs, "Mobile Adapter GB" -> "17 - Telephone Status"). Red
+ * shares Yellow's value here -- it is not grouped with Blue. */
+#define MAGB_PHONE_ADAPTER_BLUE   0x4DU
+#define MAGB_PHONE_ADAPTER_RED    0x48U
+#define MAGB_PHONE_ADAPTER_YELLOW 0x48U
 
 /** Telephone Status (0x17) response byte 0: call state. */
 #define MAGB_PHONE_STATE_DISCONNECTED   0x00U

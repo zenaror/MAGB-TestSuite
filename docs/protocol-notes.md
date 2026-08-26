@@ -484,6 +484,19 @@ attempt to parse the 24-byte configuration-slot sub-structure, whose
 internal byte layout is not independently confirmed by any source this
 TestSuite has read.
 
+**Independently confirmed** by `docs/dandocs-magb.md` (Dan Docs'
+"Configuration Data" section, converted to Markdown by the project
+owner from https://shonumi.github.io/dandocs.html): every offset above
+matches exactly (`0x0C`-`0x15` login ID, `0x2C`-`0x43` email,
+`0x4A`-`0x5D` SMTP, `0x5E`-`0x70` POP, `0x76`-`0xBD` the three
+configuration slots, `0xBE`-`0xBF` checksum) -- two independent
+sources (a real GBA title's own parser, and Dan Docs' reverse
+engineering) now agree byte-for-byte. Dan Docs additionally documents
+the login ID's real format as `gXXXXXXXXX` (a literal `g` followed by
+digits) and the checksum as a 16-bit additive sum of bytes `0x00`-`0xBD`
+(not yet independently validated by this TestSuite's own `19` reads,
+since `ui_show_config()` displays the field but does not verify it).
+
 ## GB00 HTTP authentication
 
 This is an HTTP-application-layer scheme REON uses for some
@@ -554,17 +567,63 @@ hex of the same first 32 bytes). Get this wrong and the server can't
 even find the right session to validate against, regardless of
 whether the password hash is correct.
 
-**Credentials assumption**: `validateAuthData()` looks up the account
-by `dion_ppp_id` and checks the password against the same
+**Re-verified 2026-08-26 directly against `references/reon/web/cgb/auth.php`**
+(the project owner hit a real, persistent `32-401` even after the
+login-source fix below): read the live `doAuth()` source line-by-line
+again, not just this TestSuite's own prior summary of it. Confirms:
+the deterministic-session-id mechanism above is exactly right (both
+the challenge-issuing and validation code paths derive the identical
+64-hex-char session id, no cookie needed); the header value format
+(`GB00 name="<92 chars>"`) is exactly right (`substr($authString, 11)`
+strips precisely `GB00 name="`, 11 characters). No bug was found in
+this TestSuite's own crypto or request construction on this second
+pass. Two causes remain that are **outside this ROM's control** and
+should be checked server-side before assuming another client bug:
+
+1. `doAuth()` reads the challenge response from
+   `$_SERVER["HTTP_AUTHORIZATION"]`. Many PHP deployments (PHP-FPM
+   behind Nginx especially, but also some Apache+mod_php configs)
+   never populate this for the literal `Authorization` header unless
+   explicitly configured to pass it through (Apache:
+   `CGIPassAuth On`; Nginx: an explicit `fastcgi_param
+   HTTP_AUTHORIZATION $http_authorization;`). If the server under test
+   has this gap, `isset($_SERVER["HTTP_AUTHORIZATION"])` is false even
+   on the authenticated retry, so the server treats it as a brand-new,
+   unauthenticated request and issues a **fresh** 401 -- which looks
+   identical, from this ROM's side, to a rejected/invalid Authorization
+   value. Worth confirming server-side (e.g. `var_dump($_SERVER)` in a
+   throwaway PHP script on that deployment) before debugging the ROM
+   further.
+2. `validateAuthData()` looks up `dion_ppp_id` and compares
+   `md5($challenge.$log_in_password)`. If the account's real
+   `log_in_password` in `sys_users` isn't `TEST_ISP_PASSWORD`, this
+   fails regardless of everything else being correct. This is
+   independently testable: **Email Send/Recv** exercise the exact same
+   `TEST_ISP_PASSWORD` against the same account's mail credentials (see
+   "ISP Email" below) -- if those also fail to authenticate, the
+   password (not GB00-specific logic) is the shared root cause.
+
+**Credentials**: `validateAuthData()` looks up the account by
+`dion_ppp_id` and checks the password against the same
 `log_in_password` column POP3 auth uses (see the email test notes
-above). This TestSuite assumes `dion_ppp_id` is the same value as
-`TEST_ISP_LOGIN` -- REON's `add_user.php` presumably provisions one
-account with matching PPP id, email local-part, and password, but
-this specific assumption has not been independently confirmed the way
-the SMTP/POP3 dialogue and the bit-scramble math have been (those were
-verified against running server code / round-trip tests). If GB00 auth
-fails with a real 401-after-retry rather than a transport error,
-double-check this assumption first.
+above). This TestSuite reads the login ID **live from the adapter's
+own Read Configuration Data (0x19)** response
+(`MAGB_CONFIG_OFF_LOGIN_ID`, 10 bytes) rather than from
+`TEST_ISP_LOGIN`, falling back to `TEST_ISP_LOGIN` only if the config
+field is blank (unregistered adapter). This was changed after the
+project owner hit a real `32-401` (401-after-retry) against a live
+server: `TEST_ISP_LOGIN="test"` is not the shape of a real registered
+account, which Dan Docs' "Configuration Data" section documents as
+`gXXXXXXXXX` (offset `0x0C-0x15`, a literal `g` followed by digits) --
+REON's account records are almost certainly keyed by that real
+registered ID, not an arbitrary compile-time string. `TEST_ISP_PASSWORD`
+is still used for the password, since no password field exists
+anywhere in the documented 192-byte configuration layout (it is only
+ever kept in a game's own save data, per CLAUDE.md's Test
+Configuration notes). If GB00 auth still fails with a 401-after-retry,
+check the result screen's second line (`LOGIN <id>`, showing exactly
+which login this run used) against whatever account actually exists on
+the server under test.
 
 **Verification performed before writing any C for the Game Boy**: the
 full algorithm was prototyped in Python and round-tripped against a

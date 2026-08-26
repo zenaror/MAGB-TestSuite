@@ -323,11 +323,37 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out,
  * unconditionally calls doAuth(2) -- "Pokémon news + ranking endpoints
  * require auth even if free". See docs/protocol-notes.md, "GB00 HTTP
  * authentication" for the full derivation (round-trip tested against
- * REON's actual PHP decode function before this was written) and for
- * why this TestSuite assumes the GB00 login (dionId) is the same
- * account as TEST_ISP_LOGIN. */
+ * REON's actual PHP decode function before this was written).
+ *
+ * The GB00 login (dionId) is read live from the adapter's own Read
+ * Configuration Data (0x19) response (offset MAGB_CONFIG_OFF_LOGIN_ID,
+ * the real "gXXXXXXXXX"-style registered ID -- see Dan Docs' Mobile
+ * Adapter GB configuration layout), the same way the email tests read
+ * the email/SMTP/POP fields -- not TEST_ISP_LOGIN. A real REON account
+ * is provisioned against that registered ID, not an arbitrary string,
+ * so hardcoding "test" here would 401 against any real deployment even
+ * with perfectly correct crypto. TEST_ISP_PASSWORD is still used for
+ * the password, since no password is ever stored in the adapter's
+ * configuration memory (see CLAUDE.md's Test Configuration section). */
 #define GB00_RESP_BUF_SIZE 200U
 static uint8_t s_gb00_resp[GB00_RESP_BUF_SIZE];
+
+/* Copies printable bytes from a config field until a 0x00 byte or
+ * `max_len`, NUL-terminating. Config fields observed 0x00-padded past
+ * their actual content. Shared with the email tests further below. */
+static void config_field_to_cstr(const uint8_t *field, uint8_t max_len,
+                                  char *out, uint8_t out_cap)
+{
+    uint8_t i;
+    uint8_t n = 0U;
+    for (i = 0U; i < max_len && n < (uint8_t)(out_cap - 1U); i++) {
+        if (field[i] == 0x00U) {
+            break;
+        }
+        out[n++] = (char)field[i];
+    }
+    out[n] = '\0';
+}
 
 /* Sends one HTTP/1.0 GET (optionally with an extra header line, e.g.
  * "Authorization: ...\r\n", or NULL for none) over `conn_id` and
@@ -426,11 +452,34 @@ void test_isp_http_gb00(magb_context_t *ctx, test_result_t *out,
     char challenge[GB00_CHALLENGE_LEN + 1U];
     static char auth_header[16U + GB00_AUTHORIZATION_LEN + 4U];
     char status[4];
+    uint8_t config[MAGB_CONFIG_SIZE];
+    char gb00_login[MAGB_CONFIG_LOGIN_ID_LEN + 1U];
 
     result_init(out, MAGB_CMD_TRANSFER);
 
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, "BEGIN SESSION FAILED"); return; }
+
+    r = magb_read_config(ctx, config);
+    if (r != MAGB_OK) { result_fail(out, r, "READ CONFIG FAILED"); (void)magb_end_session(ctx); return; }
+    config_field_to_cstr(&config[MAGB_CONFIG_OFF_LOGIN_ID], MAGB_CONFIG_LOGIN_ID_LEN,
+                          gb00_login, sizeof(gb00_login));
+    if (gb00_login[0] == '\0') {
+        /* Adapter never registered via Mobile Trainer (config blank) --
+         * fall back to the compile-time login rather than failing
+         * outright; a real deployment will still reject it with 401,
+         * but this keeps the test runnable against libmobile's default
+         * unregistered config. */
+        strncpy(gb00_login, TEST_ISP_LOGIN, sizeof(gb00_login) - 1U);
+        gb00_login[sizeof(gb00_login) - 1U] = '\0';
+    }
+    /* detail[1] is only otherwise touched by "RX %u B" at the very end
+     * of this function (removed in favor of this) -- result_fail()
+     * only ever overwrites detail[0], so this survives to the result
+     * screen on every exit path, success or failure, which matters
+     * here specifically because a wrong login is the single most
+     * likely cause of a 401-after-retry. */
+    sprintf(out->detail[1], "LOGIN %s", gb00_login);
 
     r = magb_telephone_status(ctx, &phone);
     if (r != MAGB_OK) { result_fail(out, r, "PHONE STATUS FAILED"); (void)magb_end_session(ctx); return; }
@@ -483,7 +532,7 @@ void test_isp_http_gb00(magb_context_t *ctx, test_result_t *out,
 
     {
         char auth_value[GB00_AUTHORIZATION_LEN + 1U];
-        gb00_build_authorization(challenge, TEST_ISP_LOGIN, TEST_ISP_PASSWORD, auth_value);
+        gb00_build_authorization(challenge, gb00_login, TEST_ISP_PASSWORD, auth_value);
         sprintf(auth_header, "Authorization: GB00 name=\"%s\"\r\n", auth_value);
     }
 
@@ -503,7 +552,10 @@ void test_isp_http_gb00(magb_context_t *ctx, test_result_t *out,
     out->passed = true;
     out->result = MAGB_OK;
     sprintf(out->detail[0], "AUTH -> HTTP %s", status);
-    sprintf(out->detail[1], "RX %u B", resp_len);
+    /* detail[1] is left as the "LOGIN <id>" line set right after Read
+     * Config -- more useful here than the RX byte count (already in
+     * out->rx_bytes) for telling a crypto/transport bug apart from a
+     * wrong-account 401. */
     sprintf(out->official_code, "32-%s", status);
 }
 
@@ -525,23 +577,6 @@ void test_isp_http_gb00(magb_context_t *ctx, test_result_t *out,
  * constants here -- they're read from the adapter's own Read
  * Configuration Data (0x19) response, exactly like a real game would
  * (and per the project owner's own suggestion). */
-
-/* Copies printable bytes from a config field until a 0x00 byte or
- * `max_len`, NUL-terminating. Config fields observed 0x00-padded past
- * their actual content. */
-static void config_field_to_cstr(const uint8_t *field, uint8_t max_len,
-                                  char *out, uint8_t out_cap)
-{
-    uint8_t i;
-    uint8_t n = 0U;
-    for (i = 0U; i < max_len && n < (uint8_t)(out_cap - 1U); i++) {
-        if (field[i] == 0x00U) {
-            break;
-        }
-        out[n++] = (char)field[i];
-    }
-    out[n] = '\0';
-}
 
 static uint16_t parse_leading_uint(const char *s)
 {

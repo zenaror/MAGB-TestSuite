@@ -233,34 +233,86 @@ static void print_ascii_field(const uint8_t *bytes, uint8_t len)
  * with test_runner.c's email tests, which read the same fields to
  * find the adapter's configured email/SMTP/POP servers. */
 
-void ui_show_config(const uint8_t config[MAGB_CONFIG_SIZE])
+#define CONFIG_PAGE_COUNT 2U
+
+/* Draws one page of the config screen. Every line is placed with an
+ * explicit gotoxy() rather than relying on cumulative cursor position
+ * after each printf/print_ascii_field call -- a field that happens to
+ * land exactly on the 20-column boundary (e.g. a 10-char "LOGIN ID: "
+ * prefix + a 10-char login, or a field printed via print_ascii_field
+ * at exactly the field width) was observed on real BGB to sometimes
+ * leave a stray blank row before the next line, which then pushed
+ * later content down into the fixed A/B prompt row and got overwritten
+ * by it. Explicit positioning makes each line's row deterministic
+ * regardless of that. Splitting into two pages (session/network vs.
+ * mail fields) was requested after the same screenshot showed the
+ * single-screen version simply didn't fit in 18 rows. */
+static void draw_config_page(const uint8_t config[MAGB_CONFIG_SIZE], uint8_t page)
 {
     cls();
-    printf("ADAPTER CONFIG (0x19)\n\n");
-    printf("MAGIC: %hx %hx\n", (unsigned char)config[MAGB_CONFIG_OFF_MAGIC],
-           (unsigned char)config[MAGB_CONFIG_OFF_MAGIC + 1U]);
-    /* Two calls, not one mixed %hx+%s call -- see the main-menu comment above. */
-    printf("REG STATE: %hx ", (unsigned char)config[MAGB_CONFIG_OFF_REG_STATE]);
-    printf("%s\n", (config[MAGB_CONFIG_OFF_REG_STATE] & 0x01U) ? "(REG)" : "(NONE)");
-    printf("DNS1 %u.%u.%u.%u\n",
-           config[MAGB_CONFIG_OFF_DNS1], config[MAGB_CONFIG_OFF_DNS1 + 1U],
-           config[MAGB_CONFIG_OFF_DNS1 + 2U], config[MAGB_CONFIG_OFF_DNS1 + 3U]);
-    printf("DNS2 %u.%u.%u.%u\n",
-           config[MAGB_CONFIG_OFF_DNS2], config[MAGB_CONFIG_OFF_DNS2 + 1U],
-           config[MAGB_CONFIG_OFF_DNS2 + 2U], config[MAGB_CONFIG_OFF_DNS2 + 3U]);
-    printf("LOGIN ID: ");
-    print_ascii_field(&config[MAGB_CONFIG_OFF_LOGIN_ID], MAGB_CONFIG_LOGIN_ID_LEN);
-    printf("EMAIL:\n");
-    print_ascii_field(&config[MAGB_CONFIG_OFF_EMAIL], 20U);
-    print_ascii_field(&config[MAGB_CONFIG_OFF_EMAIL + 20U], MAGB_CONFIG_EMAIL_LEN - 20U);
-    printf("SMTP: ");
-    print_ascii_field(&config[MAGB_CONFIG_OFF_SMTP], MAGB_CONFIG_SMTP_LEN);
-    printf("POP: ");
-    print_ascii_field(&config[MAGB_CONFIG_OFF_POP], MAGB_CONFIG_POP_LEN);
+    printf("ADAPTER CONFIG (0x19)");
+    gotoxy(15U, 0U);
+    printf("%u/%u", (uint8_t)(page + 1U), CONFIG_PAGE_COUNT);
+
+    if (page == 0U) {
+        gotoxy(0U, 2U);
+        printf("MAGIC: %hx %hx", (unsigned char)config[MAGB_CONFIG_OFF_MAGIC],
+               (unsigned char)config[MAGB_CONFIG_OFF_MAGIC + 1U]);
+        gotoxy(0U, 3U);
+        printf("REG STATE: %hx ", (unsigned char)config[MAGB_CONFIG_OFF_REG_STATE]);
+        printf("%s", (config[MAGB_CONFIG_OFF_REG_STATE] & 0x01U) ? "(REG)" : "(NONE)");
+        gotoxy(0U, 4U);
+        printf("DNS1 %u.%u.%u.%u",
+               config[MAGB_CONFIG_OFF_DNS1], config[MAGB_CONFIG_OFF_DNS1 + 1U],
+               config[MAGB_CONFIG_OFF_DNS1 + 2U], config[MAGB_CONFIG_OFF_DNS1 + 3U]);
+        gotoxy(0U, 5U);
+        printf("DNS2 %u.%u.%u.%u",
+               config[MAGB_CONFIG_OFF_DNS2], config[MAGB_CONFIG_OFF_DNS2 + 1U],
+               config[MAGB_CONFIG_OFF_DNS2 + 2U], config[MAGB_CONFIG_OFF_DNS2 + 3U]);
+        gotoxy(0U, 7U);
+        printf("LOGIN ID:");
+        gotoxy(0U, 8U);
+        print_ascii_field(&config[MAGB_CONFIG_OFF_LOGIN_ID], MAGB_CONFIG_LOGIN_ID_LEN);
+    } else {
+        gotoxy(0U, 2U);
+        printf("EMAIL:");
+        gotoxy(0U, 3U);
+        print_ascii_field(&config[MAGB_CONFIG_OFF_EMAIL], 20U);
+        gotoxy(0U, 4U);
+        print_ascii_field(&config[MAGB_CONFIG_OFF_EMAIL + 20U], MAGB_CONFIG_EMAIL_LEN - 20U);
+        gotoxy(0U, 6U);
+        printf("SMTP:");
+        gotoxy(0U, 7U);
+        print_ascii_field(&config[MAGB_CONFIG_OFF_SMTP], MAGB_CONFIG_SMTP_LEN);
+        gotoxy(0U, 9U);
+        printf("POP:");
+        gotoxy(0U, 10U);
+        print_ascii_field(&config[MAGB_CONFIG_OFF_POP], MAGB_CONFIG_POP_LEN);
+    }
 
     gotoxy(0U, 16U);
+    printf("LEFT/RIGHT: PAGE");
+    gotoxy(0U, 17U);
     printf("A/B: MENU");
-    (void)ui_prompt_continue();
+}
+
+void ui_show_config(const uint8_t config[MAGB_CONFIG_SIZE])
+{
+    uint8_t page = 0U;
+
+    for (;;) {
+        uint8_t pressed;
+
+        draw_config_page(config, page);
+        pressed = wait_key_edge();
+        if (pressed & J_LEFT) {
+            page = (page == 0U) ? (uint8_t)(CONFIG_PAGE_COUNT - 1U) : (uint8_t)(page - 1U);
+        } else if (pressed & J_RIGHT) {
+            page = (uint8_t)((page + 1U) % CONFIG_PAGE_COUNT);
+        } else if (pressed & (J_A | J_B)) {
+            return;
+        }
+    }
 }
 
 bool ui_edit_number(char *buf, const char *label)
