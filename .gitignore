@@ -50,3 +50,19 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Mobile Adapter GB TestSuite
+build/
+references/
+*.ihx
+*.noi
+*.map
+*.sym
+*.lst
+*.gbc
+*.gb
+# Only auto-generated GBDK/SDCC assembly is ignored here; this project
+# has no hand-written .s/.asm sources. If one is ever added, exclude
+# it explicitly above this line.
+*.asm
+
