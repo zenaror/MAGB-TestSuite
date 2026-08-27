@@ -314,7 +314,7 @@ explicitly (`*remote_closed`).
 `libmobile/commands.h`: `MOBILE_ADAPTER_GAMEBOY=0x00`,
 `_GAMEBOY_ADVANCE=0x01`, `_BLUE=0x08`, `_YELLOW=0x09`, `_GREEN=0x0A`,
 `_RED=0x0B`. `libmobile/config.c` defaults to `MOBILE_ADAPTER_BLUE`, so
-a stock libmobile/libmobile-bgb setup identifies itself as `0x08` during
+a stock libmobile setup identifies itself as `0x08` during
 Begin Session. `magb_commands.h`'s `MAGB_IS_KNOWN_ADAPTER_DEVICE()`
 accepts the whole documented `0x08-0x0B` range rather than hardcoding
 one model, per the project brief.

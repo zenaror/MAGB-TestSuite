@@ -233,8 +233,8 @@ link.
   sub-structures, whose internal byte layout is not independently
   confirmed by any source consulted for this project.
 - The ISP/HTTP test's actual reachability of `gameboy.datacenter.ne.jp`
-  depends entirely on how the `libmobile`/`libmobile-bgb` instance
-  under test is configured (relay, DNS, network access) — this ROM
+  depends entirely on how the `libmobile` instance under test is
+  configured (relay, DNS, network access) — this ROM
   performs no shortcut and reports exactly which stage of the chain
   failed if it doesn't reach a real HTTP response.
 
