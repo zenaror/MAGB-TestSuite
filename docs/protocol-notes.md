@@ -744,6 +744,43 @@ no battery-backed SRAM). A real MBC with save RAM (e.g.
 MBC5+RAM+BATTERY) would only be needed if the password had to survive
 a power cycle, which was never asked for.
 
+## Error Status (0x6E) can replace the response to any command
+
+Discovered from a real BGB + libmobile-bgb capture of the P2P test:
+after the far end's connection dropped mid-exchange, a Transfer Data
+(`15`) poll came back not as `95` (the normal response) but as
+`6E|0x80 = EE`, with a 2-byte payload `[15, 00]`. Dan Docs' "6E - Error
+Status" section documents this as a general mechanism, not specific to
+Transfer Data: **any** request can get an Error Status response instead
+of its own expected response command, with payload byte 0 naming which
+command failed and byte 1 a command-specific error code (see the table
+in the next section).
+
+Every command wrapper in `magb_network.c`/`magb_session.c` used to only
+check for its *own* expected response command and fall back to
+`MAGB_ERR_UNEXPECTED_COMMAND` otherwise -- which is exactly what
+happened here, misreporting a real, specific, documented failure
+("Transfer Data: invalid connection / communication failed") as a
+generic "unexpected command" with no useful detail. Rather than
+duplicate an Error Status check in all thirteen wrappers, `magb_execute()`
+now recognizes `0x6E|0x80` once, centrally, right after validating the
+response frame: it captures the failed command/error code into
+`ctx->remote_error_command`/`remote_error_code` and returns
+`MAGB_ERR_REMOTE_STATUS` instead of `MAGB_OK`. Every wrapper already
+does `if (r != MAGB_OK) return r;` immediately after calling
+`magb_execute()`, so this required no changes to the wrappers
+themselves. `test_p2p_caller()`/`test_p2p_listener()`'s receive-failure
+path (`p2p_recv_fail()`) shows the decoded command/code on the result
+screen instead of a misleading "TRANSFER TIMEOUT" when this is what
+actually happened.
+
+This does not conflict with `magb_execute()`'s documented policy of
+leaving "is this the right response command for my request" to the
+caller (Transfer Data's `15`-vs-`1F` distinction is the reason that
+policy exists) -- `0x6E|0x80` is never a *valid success* shape for any
+command, so recognizing it is a transport-level fact, not a
+per-command judgment call.
+
 ## Official Mobile Adapter GB error codes
 
 Real Nintendo software (Pokémon Crystal included) shows the player a

@@ -1436,6 +1436,24 @@ static void p2p_cleanup(magb_context_t *ctx)
     (void)magb_end_session(ctx);
 }
 
+/* p2p_recv_frame() can fail with MAGB_ERR_REMOTE_STATUS when the far
+ * end's connection drops mid-exchange -- confirmed on a real BGB
+ * session: after the listener side's connection died, the adapter
+ * answered a Transfer Data poll with an Error Status packet (command
+ * 0x15, code 0x00 -- "invalid connection / communication failed", Dan
+ * Docs' "6E - Error Status" table) instead of more data. Showing the
+ * generic kMsgTransferTimeout for that would be actively misleading,
+ * since nothing timed out; show the adapter's own reported command/
+ * code instead. */
+static void p2p_recv_fail(test_result_t *out, magb_context_t *ctx, magb_result_t r)
+{
+    result_fail(out, r, kMsgTransferTimeout);
+    if (r == MAGB_ERR_REMOTE_STATUS) {
+        sprintf(out->detail[0], "CMD %hx ERR %hx", (unsigned char)ctx->remote_error_command,
+                (unsigned char)ctx->remote_error_code);
+    }
+}
+
 void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number)
 {
     static const uint8_t pattern[8] = { 0x00, 0x01, 0x55, 0xAA, 0xFE, 0xFF, 0x10, 0xEF };
@@ -1460,7 +1478,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     if (r != MAGB_OK) { result_fail(out, r, "PING SEND FAILED"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
     if (recv_len != 4U || memcmp(recv_payload, "PONG", 4U) != 0 || recv_seq != 1U) {
         result_fail(out, MAGB_ERR_P2P, "BAD TEST FRAME");
         p2p_cleanup(ctx);
@@ -1471,7 +1489,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     if (r != MAGB_OK) { result_fail(out, r, "PATTERN SEND FAILED"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
     if (recv_len != sizeof(pattern) || memcmp(recv_payload, pattern, sizeof(pattern)) != 0 ||
             recv_seq != 2U) {
         result_fail(out, MAGB_ERR_P2P, "BAD PAYLOAD");
@@ -1489,7 +1507,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     if (r != MAGB_OK) { result_fail(out, r, "HELLO SEND FAILED"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
     if (recv_len != 11U || memcmp(recv_payload, "HELLO WORLD", 11U) != 0 || recv_seq != 3U) {
         result_fail(out, MAGB_ERR_P2P, "BAD HELLO ECHO");
         p2p_cleanup(ctx);
@@ -1531,7 +1549,7 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
     if (recv_len != 4U || memcmp(recv_payload, "PING", 4U) != 0) {
         result_fail(out, MAGB_ERR_P2P, "BAD TEST FRAME");
         p2p_cleanup(ctx);
@@ -1542,7 +1560,7 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     if (r != MAGB_OK) { result_fail(out, r, "PONG SEND FAILED"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
 
     r = p2p_send_frame(ctx, recv_seq, recv_payload, recv_len);
     if (r != MAGB_OK) { result_fail(out, r, "ECHO SEND FAILED"); p2p_cleanup(ctx); return; }
@@ -1554,7 +1572,7 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     {
         uint8_t hello_len;
         r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &hello_len);
-        if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
+        if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
 
         r = p2p_send_frame(ctx, recv_seq, recv_payload, hello_len);
         if (r != MAGB_OK) { result_fail(out, r, "ECHO SEND FAILED"); p2p_cleanup(ctx); return; }
