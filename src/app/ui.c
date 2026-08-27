@@ -172,6 +172,7 @@ const char *ui_result_str(magb_result_t r)
     case MAGB_ERR_REMOTE_UNSUPPORTED: return "REMOTE: UNSUPPORTED";
     case MAGB_ERR_REMOTE_CHECKSUM:    return "REMOTE: CHECKSUM";
     case MAGB_ERR_REMOTE_INTERNAL:    return "REMOTE: INTERNAL";
+    case MAGB_ERR_REMOTE_STATUS:      return "ADAPTER ERROR STATUS";
     case MAGB_ERR_SESSION:            return "SESSION ERROR";
     case MAGB_ERR_PHONE:              return "PHONE ERROR";
     case MAGB_ERR_ISP:                return "ISP ERROR";

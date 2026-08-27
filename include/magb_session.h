@@ -56,6 +56,14 @@ typedef struct {
     /* Last exchange, for the UI's diagnostic screen. */
     uint8_t last_command_sent;
     uint8_t last_command_recv;
+
+    /* Populated by magb_execute() when the adapter reports an Error
+     * Status (0x6E) response: which command it says failed, and its
+     * command-specific error code (Dan Docs' "6E - Error Status"
+     * table). Stale/meaningless unless the most recent magb_result_t
+     * was MAGB_ERR_REMOTE_STATUS. */
+    uint8_t remote_error_command;
+    uint8_t remote_error_code;
 } magb_context_t;
 
 void magb_context_init(magb_context_t *ctx);
@@ -89,6 +97,18 @@ magb_result_t magb_wake_adapter(magb_context_t *ctx);
  * come back as 0x1F|0x80 instead of 0x15|0x80 to signal a remote
  * disconnect, so that judgment belongs to the network-layer command
  * wrapper that knows which responses are valid for it.
+ *
+ * The one exception: an Error Status (0x6E) response is never a valid
+ * success shape for *any* command, so it's recognized here, once, for
+ * every caller instead of duplicating the check in every wrapper
+ * (confirmed on real BGB: a P2P Transfer Data poll came back as
+ * 0x6E|0x80 with payload [0x15, 0x00], "Transfer Data: invalid
+ * connection", after the far end's connection dropped -- every wrapper
+ * that only checked for its own expected response command was
+ * misreporting this as MAGB_ERR_UNEXPECTED_COMMAND). On that response,
+ * this records the failed command/error code in
+ * ctx->remote_error_command/_code (Dan Docs' "6E - Error Status"
+ * table) and returns MAGB_ERR_REMOTE_STATUS instead of MAGB_OK.
  */
 magb_result_t magb_execute(magb_context_t *ctx, uint8_t command,
                             const uint8_t *payload, uint8_t payload_len,

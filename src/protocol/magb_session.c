@@ -42,6 +42,8 @@ void magb_context_init(magb_context_t *ctx)
     ctx->trace_count = 0U;
     ctx->last_command_sent = 0U;
     ctx->last_command_recv = 0U;
+    ctx->remote_error_command = 0U;
+    ctx->remote_error_code = 0U;
 }
 
 void magb_trace_record(magb_context_t *ctx, uint8_t direction, uint8_t value)
@@ -335,6 +337,14 @@ magb_result_t magb_execute(magb_context_t *ctx, uint8_t command,
     }
 
     ctx->last_command_recv = response->command;
+
+    if (response->command == magb_response_command(MAGB_CMD_ERROR_STATUS)) {
+        if (response->payload_len >= 2U) {
+            ctx->remote_error_command = response->payload[0];
+            ctx->remote_error_code = response->payload[1];
+        }
+        return MAGB_ERR_REMOTE_STATUS;
+    }
     return MAGB_OK;
 }
 
