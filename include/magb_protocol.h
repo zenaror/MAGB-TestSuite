@@ -76,6 +76,9 @@ typedef enum {
     MAGB_ERR_REMOTE_UNSUPPORTED,
     MAGB_ERR_REMOTE_CHECKSUM,
     MAGB_ERR_REMOTE_INTERNAL,
+    MAGB_ERR_REMOTE_STATUS, /* adapter sent an Error Status (0x6E) packet
+                              * for our request -- see magb_execute() and
+                              * magb_context_t's remote_error_command/code */
 
     MAGB_ERR_SESSION,
     MAGB_ERR_PHONE,
