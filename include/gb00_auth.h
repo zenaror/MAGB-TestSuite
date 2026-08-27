@@ -47,10 +47,10 @@ uint16_t base64_decode(const char *in, uint16_t in_len, uint8_t *out);
 /** Builds the Authorization header's "name" value (GB00_AUTHORIZATION_LEN
  * characters + NUL) for the given challenge (exactly GB00_CHALLENGE_LEN
  * base64 characters, as received verbatim in the WWW-Authenticate
- * header), login (dionId, <=19 bytes -- this TestSuite assumes it is
- * the same account as TEST_ISP_LOGIN, see docs/protocol-notes.md) and
- * password (TEST_ISP_PASSWORD). `out` must have room for
- * GB00_AUTHORIZATION_LEN+1 bytes. */
+ * header), login (dionId, <=19 bytes -- read live from the adapter's
+ * own config, see docs/protocol-notes.md) and password (entered by the
+ * user via the "ISP PASSWORD" menu -- see main.c). `out` must have
+ * room for GB00_AUTHORIZATION_LEN+1 bytes. */
 void gb00_build_authorization(const char *challenge_b64, const char *login,
                                const char *password, char *out);
 

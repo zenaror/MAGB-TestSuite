@@ -12,20 +12,59 @@
 #ifndef TEST_CONFIG_H
 #define TEST_CONFIG_H
 
-/* ISP dial string. "#9677" is the real DION PDC ISP number: it is
- * hardcoded as a recognized special case in libmobile/commands.c
- * (isp_numbers[]) and is the exact same value REON's own
- * config.example.json uses for mobile_center_numb. libmobile's PPP
- * login handler (command_ppp_connect) does not check login/password
- * against any external account system -- it only echoes back an
- * assigned IP + DNS servers -- so "test"/"test" works against it
- * as-is. Against a real REON deployment's web-facing (HTTP/GB00)
- * auth, you would need a real account (see REON's own
- * `add_user.php`), but that is a separate, application-layer concern
- * from the Mobile-Adapter-level ISP login exercised by this test. */
+/* ISP dial string and login ID -- FALLBACK DEFAULTS ONLY. Every
+ * ISP-touching test (test_isp_http(), test_isp_http_gb00(),
+ * test_isp_email_send/recv() in test_runner.c, via the shared
+ * read_isp_identity() helper) reads the real dial string
+ * (Configuration Slot 1, BCD-decoded) and login ID
+ * (MAGB_CONFIG_OFF_LOGIN_ID) live from the adapter's own Read
+ * Configuration Data (0x19) response, exactly like the email tests
+ * already read email/SMTP/POP -- per the project owner's own request
+ * ("se algo exigir autenticacao, voce tem que ler todas as infos
+ * necessarias da config do adaptador"). These two constants are only
+ * used if the adapter has never been registered via Mobile Trainer
+ * (a blank config), so this TestSuite still runs against libmobile's
+ * default unregistered config exactly as before.
+ *
+ * "#9677" is the real DION PDC ISP number: it is hardcoded as a
+ * recognized special case in libmobile/commands.c (isp_numbers[]) and
+ * is the exact same value REON's own config.example.json uses for
+ * mobile_center_numb. "test" as a login ID is not the shape of a real
+ * registered account (Dan Docs documents the real format as
+ * "gXXXXXXXXX", see docs/dandocs-magb.md) -- it only ever gets used as
+ * this last-resort fallback. libmobile's PPP login handler
+ * (command_ppp_connect) does not check login/password against any
+ * external account system -- it only echoes back an assigned IP + DNS
+ * servers -- so any login/password works against it at the
+ * Mobile-Adapter level regardless. A real REON deployment's web-facing
+ * (HTTP/GB00) auth, and its POP3/SMTP mail auth, both need a real
+ * account's real login ID and password -- see TEST_ISP_PASSWORD_MAX_LEN
+ * below for where the password itself comes from instead. */
 #define TEST_ISP_PHONE        "#9677"
 #define TEST_ISP_LOGIN        "test"
-#define TEST_ISP_PASSWORD     "test"
+
+/* ISP account password -- unlike the dial string and login ID above,
+ * there is deliberately NO compile-time default/fallback constant
+ * here. No password field exists anywhere in the documented 192-byte
+ * configuration layout (it is only ever kept in a game's own save
+ * data), so it can never be read from Read Config either -- it has to
+ * come from the user, via the "ISP PASSWORD" menu entry
+ * (ui_edit_text() in main.c, kept only in RAM; this ROM has no
+ * mapper/save). An earlier version of this file *did* define
+ * TEST_ISP_PASSWORD "test" as a default, which silently masked a real
+ * server-side 401/-ERR behind a misleading symptom for a full day of
+ * debugging (see docs/protocol-notes.md's GB00 section) -- removed for
+ * exactly that reason. `require_password()` in test_runner.c now fails
+ * any test that actually authenticates (GB00 HTTP, POP3) with an
+ * explicit "SET ISP PASSWORD" message while the password is still
+ * empty, rather than guessing one.
+ *
+ * TEST_ISP_PASSWORD_MAX_LEN caps the ISP PASSWORD screen's editable
+ * length at 8 characters (the project owner's own account password,
+ * "pass157", is 7) -- well under the Mobile Adapter protocol's own
+ * 0x20-byte ISP Login password field limit; this is purely this
+ * TestSuite's own UI constraint. */
+#define TEST_ISP_PASSWORD_MAX_LEN 8U
 
 /* 0.0.0.0 tells the adapter "use your own configured DNS" -- confirmed
  * libmobile behavior (commands.c command_ppp_connect): a zeroed DNS
@@ -78,17 +117,26 @@
  * it does not stop the PHP script itself from demanding auth once
  * executed. This TestSuite implements that handshake (see
  * `include/gb00_auth.h`, `test_isp_http_gb00()` in test_runner.c, and
- * docs/protocol-notes.md's "GB00 HTTP authentication") using
- * TEST_ISP_LOGIN/TEST_ISP_PASSWORD as the account credentials. */
+ * docs/protocol-notes.md's "GB00 HTTP authentication") using the
+ * adapter's own live-config login ID (falling back to TEST_ISP_LOGIN)
+ * and the ISP PASSWORD menu's password as the account credentials. */
 #define TEST_HTTP_NEWS_CONFIG_PATH "/cgb/download?name=/01/CGB-BXTJ/news/config.php"
 #define TEST_HTTP_NEWS_PATH        "/cgb/download?name=/01/CGB-BXTJ/news/100.news.php"
 
-/* Custom/extra HTTP target. Change the host to your own deployment
- * (e.g. a LAN IP) if you're not testing against the public REON
- * datacenter host used above. */
-#define TEST_HTTP_CUSTOM_HOST "gameboy.datacenter.ne.jp"
-#define TEST_HTTP_CUSTOM_PORT 80
-#define TEST_HTTP_CUSTOM_PATH "/01/CGB-B9AJ/index.html"
+/* Mobile Trainer's real home page -- Dan Docs' "Mobile Trainer"
+ * section documents this exact observed URL
+ * (http://gameboy.datacenter.ne.jp/01/CGB-B9AJ/index.html,
+ * CGB-B9AJ being Mobile Trainer's own game code). No auth needed (it's
+ * outside REON's /cgb/download|upload front controller entirely, so
+ * doAuth()'s cost-prefix check never even applies). Was originally
+ * labeled "Custom" as a generic user-overridable target; renamed to
+ * "Trainer Home" once it became clear it always held this one real,
+ * specific URL rather than an actually-custom one. Still fine to
+ * repoint at your own deployment (e.g. a LAN IP) if you want a genuine
+ * custom target instead. */
+#define TEST_HTTP_TRAINER_HOME_HOST "gameboy.datacenter.ne.jp"
+#define TEST_HTTP_TRAINER_HOME_PORT 80
+#define TEST_HTTP_TRAINER_HOME_PATH "/01/CGB-B9AJ/index.html"
 
 /* 12-digit IP-style phone number: libmobile's own mobile_parse_phoneaddr()
  * (util.c) parses any 12-digit MAGB_CMD_DIAL payload as 4 groups of 3
@@ -98,5 +146,24 @@
  * relay-assigned number or another host's IP. This can also be
  * changed at runtime from the P2P Caller menu (digit-entry screen). */
 #define TEST_P2P_PHONE        "127000000001"
+
+/* "RAW TCP" test target -- mirrors gba-link-connection's own
+ * description of a real "ISP call (PPP)" test: dial the ISP, open a
+ * TCP socket to an arbitrary address, and transfer arbitrary data.
+ * Point this at a machine running `nc -l <port>` (or `ncat`/`socat`
+ * equivalents) and whatever you type there is transferred to the ROM
+ * and shown on screen live, character by character -- see
+ * test_isp_raw_tcp() in test_runner.c. No auth, no fixed request/
+ * response shape: this is the one ISP test that's genuinely
+ * open-ended/interactive rather than scripted.
+ *
+ * Defaults to the loopback address (127.0.0.1) -- point it at your own
+ * dev machine's actual LAN IP at runtime from the ISP/HTTP submenu
+ * (digit-entry screen) before running the test, since the adapter/
+ * network backend generally can't reach the Game Boy's own loopback.
+ * The port is compile-time only -- override via CFLAGS_EXTRA if 8080
+ * collides with something. */
+#define TEST_ISP_RAW_IP   "127000000001"
+#define TEST_ISP_RAW_PORT 8080
 
 #endif /* TEST_CONFIG_H */

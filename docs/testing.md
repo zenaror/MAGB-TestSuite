@@ -30,6 +30,23 @@ covers:
 All of these must pass before touching anything downstream of the
 packet layer. They're fast enough to run after every protocol change.
 
+`make test` also builds and runs `tests/host/test_config.c` +
+`src/protocol/magb_config.c` (the configuration-blob parser --
+checksum validation, Configuration Slot BCD phone decode). Most of its
+assertions are synthetic vectors, but the strongest ones cross-check
+against a **real captured Mobile Adapter GB configuration file**,
+`config.bin`, expected at the repo root.
+
+**`config.bin` is not part of this repository.** It's real account
+data (login ID, email, ISP dial string), so it's `.gitignore`d and
+must be provisioned locally: capture one from a real session (e.g.
+libmobile-bgb writes its own configuration file after a successful
+Read Config / Mobile Trainer registration) and place it at the repo
+root as `config.bin`. Without it, `test_config`'s real-capture checks
+fail with an explicit message telling you to add the file; the
+synthetic checks (and all of `test_packet`) still run and pass
+regardless.
+
 ## Manual tests against BGB + libmobile-bgb + libmobile
 
 This is the primary target environment and the one to use for Tests 1

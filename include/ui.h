@@ -14,6 +14,7 @@
 typedef enum {
     UI_MENU_ADAPTER_SESSION = 0,
     UI_MENU_READ_CONFIG,
+    UI_MENU_ISP_PASSWORD,
     UI_MENU_ISP_HTTP,
     UI_MENU_P2P_CALLER,
     UI_MENU_P2P_LISTENER,
@@ -41,6 +42,17 @@ void ui_show_config(const uint8_t config[MAGB_CONFIG_SIZE]);
  * `buf` must be at least 13 bytes (12 digits + NUL) and NUL-terminated
  * on entry; left unchanged if the user cancels with B. */
 bool ui_edit_number(char *buf, const char *label);
+
+/** In-place text editor for a short (<=UI_EDIT_TEXT_MAX_LEN char)
+ * string such as an ISP password -- UP/DOWN cycles the character
+ * under the cursor through a space (used as an erase/blank slot) plus
+ * A-Z, a-z, 0-9; LEFT/RIGHT moves the cursor. `buf` must be
+ * NUL-terminated on entry (the existing value is shown, editable) and
+ * have room for `buf_cap` bytes total including the NUL; left
+ * unchanged if the user cancels with B. Trailing spaces are trimmed
+ * from the result on confirm. */
+#define UI_EDIT_TEXT_MAX_LEN 20U
+bool ui_edit_text(char *buf, uint8_t buf_cap, const char *label);
 
 /** Generic scrolling list picker (used for the ISP/HTTP sub-test
  * menu). Returns the selected index, or `count` if the user cancels

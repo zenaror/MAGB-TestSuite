@@ -66,3 +66,5 @@ references/
 # it explicitly above this line.
 *.asm
 
+/emulador
+config.bin

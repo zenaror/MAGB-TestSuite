@@ -1,5 +1,7 @@
 #include "ui.h"
 #include "magb_commands.h"
+#include "magb_config.h"
+#include "sound.h"
 
 #include <gb/gb.h>
 #include <gbdk/console.h>
@@ -9,6 +11,7 @@
 static const char *const kMenuLabels[UI_MENU_COUNT] = {
     "ADAPTER / SESSION",
     "READ CONFIG",
+    "ISP PASSWORD",
     "ISP / HTTP",
     "P2P CALLER",
     "P2P LISTENER"
@@ -84,11 +87,15 @@ ui_menu_item_t ui_main_menu(bool *want_trace)
         pressed = wait_key_edge();
         if (pressed & J_UP) {
             sel = (sel == 0U) ? (uint8_t)(UI_MENU_COUNT - 1U) : (uint8_t)(sel - 1U);
+            sound_select();
         } else if (pressed & J_DOWN) {
             sel = (uint8_t)((sel + 1U) % UI_MENU_COUNT);
+            sound_select();
         } else if (pressed & J_A) {
+            sound_select();
             return (ui_menu_item_t)sel;
         } else if (pressed & J_SELECT) {
+            sound_select();
             *want_trace = true;
             return (ui_menu_item_t)sel;
         }
@@ -118,11 +125,15 @@ uint8_t ui_select_submenu(const char *title, const char *const *labels, uint8_t 
         pressed = wait_key_edge();
         if (pressed & J_UP) {
             sel = (sel == 0U) ? (uint8_t)(count - 1U) : (uint8_t)(sel - 1U);
+            sound_select();
         } else if (pressed & J_DOWN) {
             sel = (uint8_t)((sel + 1U) % count);
+            sound_select();
         } else if (pressed & J_A) {
+            sound_select();
             return sel;
         } else if (pressed & J_B) {
+            sound_select();
             return count;
         }
     }
@@ -158,6 +169,12 @@ const char *ui_result_str(magb_result_t r)
 
 void ui_show_result(const char *title, const test_result_t *result)
 {
+    if (result->passed) {
+        sound_success();
+    } else {
+        sound_error();
+    }
+
     cls();
     printf("%s\n\n", title);
     printf("RESULT: %s\n\n", result->passed ? "PASS" : "FAIL");
@@ -233,7 +250,7 @@ static void print_ascii_field(const uint8_t *bytes, uint8_t len)
  * with test_runner.c's email tests, which read the same fields to
  * find the adapter's configured email/SMTP/POP servers. */
 
-#define CONFIG_PAGE_COUNT 2U
+#define CONFIG_PAGE_COUNT 3U
 
 /* Draws one page of the config screen. Every line is placed with an
  * explicit gotoxy() rather than relying on cumulative cursor position
@@ -244,8 +261,8 @@ static void print_ascii_field(const uint8_t *bytes, uint8_t len)
  * leave a stray blank row before the next line, which then pushed
  * later content down into the fixed A/B prompt row and got overwritten
  * by it. Explicit positioning makes each line's row deterministic
- * regardless of that. Splitting into two pages (session/network vs.
- * mail fields) was requested after the same screenshot showed the
+ * regardless of that. Splitting into pages (session/network, mail,
+ * ISP dial slot) was requested after the same screenshot showed the
  * single-screen version simply didn't fit in 18 rows. */
 static void draw_config_page(const uint8_t config[MAGB_CONFIG_SIZE], uint8_t page)
 {
@@ -255,12 +272,20 @@ static void draw_config_page(const uint8_t config[MAGB_CONFIG_SIZE], uint8_t pag
     printf("%u/%u", (uint8_t)(page + 1U), CONFIG_PAGE_COUNT);
 
     if (page == 0U) {
+        uint8_t reg_state = config[MAGB_CONFIG_OFF_REG_STATE];
         gotoxy(0U, 2U);
-        printf("MAGIC: %hx %hx", (unsigned char)config[MAGB_CONFIG_OFF_MAGIC],
-               (unsigned char)config[MAGB_CONFIG_OFF_MAGIC + 1U]);
+        printf("HDR: %hx %hx (%c%c)", (unsigned char)config[MAGB_CONFIG_OFF_MAGIC],
+               (unsigned char)config[MAGB_CONFIG_OFF_MAGIC + 1U],
+               config[MAGB_CONFIG_OFF_MAGIC], config[MAGB_CONFIG_OFF_MAGIC + 1U]);
         gotoxy(0U, 3U);
-        printf("REG STATE: %hx ", (unsigned char)config[MAGB_CONFIG_OFF_REG_STATE]);
-        printf("%s", (config[MAGB_CONFIG_OFF_REG_STATE] & 0x01U) ? "(REG)" : "(NONE)");
+        printf("REG STATE: %hx ", (unsigned char)reg_state);
+        /* Both documented values (0x01 "in progress", 0x81 "complete")
+         * have bit 0 set -- bit 7 is what actually distinguishes them
+         * (Dan Docs' "Configuration Data" section; confirmed against a
+         * real captured config.bin showing 0x01, not 0x81, before this
+         * fix -- see docs/protocol-notes.md). */
+        printf("%s", (reg_state == MAGB_REG_STATE_COMPLETE) ? "(REG)" :
+                      (reg_state == MAGB_REG_STATE_PENDING) ? "(PENDING)" : "(NONE)");
         gotoxy(0U, 4U);
         printf("DNS1 %u.%u.%u.%u",
                config[MAGB_CONFIG_OFF_DNS1], config[MAGB_CONFIG_OFF_DNS1 + 1U],
@@ -273,7 +298,9 @@ static void draw_config_page(const uint8_t config[MAGB_CONFIG_SIZE], uint8_t pag
         printf("LOGIN ID:");
         gotoxy(0U, 8U);
         print_ascii_field(&config[MAGB_CONFIG_OFF_LOGIN_ID], MAGB_CONFIG_LOGIN_ID_LEN);
-    } else {
+        gotoxy(0U, 10U);
+        printf("CHECKSUM: %s", magb_config_checksum_ok(config) ? "OK" : "BAD");
+    } else if (page == 1U) {
         gotoxy(0U, 2U);
         printf("EMAIL:");
         gotoxy(0U, 3U);
@@ -288,6 +315,27 @@ static void draw_config_page(const uint8_t config[MAGB_CONFIG_SIZE], uint8_t pag
         printf("POP:");
         gotoxy(0U, 10U);
         print_ascii_field(&config[MAGB_CONFIG_OFF_POP], MAGB_CONFIG_POP_LEN);
+    } else {
+        /* Configuration Slot 1 -- the ISP dial string Mobile Trainer
+         * actually configured. This is what Dial (0x12) sends now
+         * (magb_isp_identity_t in test_runner.c), not a compile-time
+         * TEST_ISP_PHONE default -- shown here so the two can be
+         * compared directly. */
+        char phone[17];
+        (void)magb_config_decode_phone(&config[MAGB_CONFIG_OFF_SLOT1], phone, sizeof(phone));
+        gotoxy(0U, 2U);
+        printf("SLOT 1 PHONE:");
+        gotoxy(0U, 3U);
+        if (phone[0] != '\0') {
+            printf("%s", phone);
+        } else {
+            printf("(EMPTY)");
+        }
+        gotoxy(0U, 5U);
+        printf("SLOT 1 ID:");
+        gotoxy(0U, 6U);
+        print_ascii_field(&config[MAGB_CONFIG_OFF_SLOT1 + MAGB_CONFIG_SLOT_PHONE_LEN],
+                           MAGB_CONFIG_SLOT_ID_LEN);
     }
 
     gotoxy(0U, 16U);
@@ -315,6 +363,82 @@ void ui_show_config(const uint8_t config[MAGB_CONFIG_SIZE])
     }
 }
 
+/* Like wait_key_edge(), but a D-pad direction held past REPEAT_DELAY
+ * frames also fires a synthetic repeat event every REPEAT_INTERVAL
+ * frames after that, so holding a direction moves the cursor/cycles a
+ * character faster than one press per step. Still blocks internally on
+ * vsync() and only returns once per meaningful event (a fresh edge or a
+ * repeat tick) -- never once per raw frame.
+ *
+ * That distinction matters here: an earlier attempt at this returned
+ * once per *frame* regardless of input (a single vsync() + immediate
+ * return), which made the editor's for(;;) loop call cls()/printf()
+ * continuously at 60Hz instead of only on actual key events. Sampling
+ * the CPU's PC during a PyBoy investigation at that point would almost
+ * always land inside GBDK's own console/font drawing code -- which is
+ * exactly what was seen and (incorrectly) diagnosed as the ROM being
+ * stuck in an infinite loop. It wasn't stuck; it was just redrawing the
+ * whole screen 60 times a second forever, since nothing in that version
+ * ever blocked waiting for a new input. Blocking here restores the same
+ * call cadence wait_key_edge() has (one call = one visible change) while
+ * still supporting repeat via held_frames[] persisting across calls. See
+ * [[magb-input-hang-gbdk]] for the fuller writeup of that investigation. */
+#define REPEAT_DELAY    18U /* ~0.3s held before repeat starts */
+#define REPEAT_INTERVAL 6U  /* then repeats roughly 10x/sec */
+
+static uint8_t s_repeat_prev;
+static uint8_t s_repeat_held[4];
+
+/** Must be called once right before an editor's input loop starts, so a
+ * key already held from selecting the menu entry that opened the editor
+ * isn't misread as a fresh edge on the very first poll. */
+static void wait_key_repeat_reset(void)
+{
+    s_repeat_prev = joypad();
+    s_repeat_held[0] = 0U;
+    s_repeat_held[1] = 0U;
+    s_repeat_held[2] = 0U;
+    s_repeat_held[3] = 0U;
+}
+
+static uint8_t wait_key_repeat(void)
+{
+    static const uint8_t kDpadMasks[4] = { J_UP, J_DOWN, J_LEFT, J_RIGHT };
+
+    for (;;) {
+        uint8_t cur;
+        uint8_t edge;
+        uint8_t fired;
+        uint8_t i;
+
+        vsync();
+        cur = joypad();
+        edge = (uint8_t)(cur & (uint8_t)~s_repeat_prev);
+        s_repeat_prev = cur;
+
+        fired = (uint8_t)(edge & (uint8_t)(J_A | J_B));
+
+        for (i = 0U; i < 4U; i++) {
+            if (cur & kDpadMasks[i]) {
+                if (s_repeat_held[i] == 0U ||
+                    (s_repeat_held[i] >= REPEAT_DELAY &&
+                     (uint8_t)((s_repeat_held[i] - REPEAT_DELAY) % REPEAT_INTERVAL) == 0U)) {
+                    fired = (uint8_t)(fired | kDpadMasks[i]);
+                }
+                if (s_repeat_held[i] < 0xFFU) {
+                    s_repeat_held[i]++;
+                }
+            } else {
+                s_repeat_held[i] = 0U;
+            }
+        }
+
+        if (fired != 0U) {
+            return fired;
+        }
+    }
+}
+
 bool ui_edit_number(char *buf, const char *label)
 {
     char work[13];
@@ -327,6 +451,7 @@ bool ui_edit_number(char *buf, const char *label)
     }
     work[12] = '\0';
 
+    wait_key_repeat_reset();
     for (;;) {
         uint8_t pressed;
 
@@ -337,9 +462,12 @@ bool ui_edit_number(char *buf, const char *label)
         gotoxy(cursor, 4U);
         printf("^");
         gotoxy(0U, 7U);
-        printf("LEFT/RIGHT: MOVE\nUP/DOWN: DIGIT\nA: CONFIRM\nB: CANCEL");
+        printf("LEFT/RIGHT: MOVE\nUP/DOWN: DIGIT\nA: CONFIRM\nB: CANCEL\n(HOLD: FASTER)");
 
-        pressed = wait_key_edge();
+        pressed = wait_key_repeat();
+        if (pressed != 0U) {
+            sound_select();
+        }
         if (pressed & J_LEFT) {
             cursor = (cursor == 0U) ? 11U : (uint8_t)(cursor - 1U);
         } else if (pressed & J_RIGHT) {
@@ -350,6 +478,88 @@ bool ui_edit_number(char *buf, const char *label)
             work[cursor] = (char)('0' + (uint8_t)((work[cursor] - '0' + 9) % 10));
         } else if (pressed & J_A) {
             strcpy(buf, work);
+            return true;
+        } else if (pressed & J_B) {
+            return false;
+        }
+    }
+}
+
+/* Space first (the "blank slot" sentinel used to pad unused
+ * positions), then A-Z, a-z, 0-9. Real account passwords used against
+ * this project's REON test deployment (e.g. "pass157") don't need
+ * anything outside this set, and it keeps the UP/DOWN cycle short
+ * enough to dial in on real hardware without a keyboard. A full 2D
+ * on-screen keyboard was also tried here per the project owner's
+ * request, but reproducibly hung the ROM at runtime and was reverted;
+ * see [[magb-input-hang-gbdk]]. */
+static const char kTextCharset[] =
+    " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+#define TEXT_CHARSET_LEN ((uint8_t)(sizeof(kTextCharset) - 1U))
+
+static uint8_t text_charset_index(char c)
+{
+    uint8_t i;
+    for (i = 0U; i < TEXT_CHARSET_LEN; i++) {
+        if (kTextCharset[i] == c) {
+            return i;
+        }
+    }
+    return 0U; /* not found (shouldn't happen for our own buffers) -> space */
+}
+
+bool ui_edit_text(char *buf, uint8_t buf_cap, const char *label)
+{
+    char work[UI_EDIT_TEXT_MAX_LEN + 1U];
+    uint8_t max_len = (uint8_t)(buf_cap - 1U);
+    uint8_t existing_len = (uint8_t)strlen(buf);
+    uint8_t cursor = 0U;
+    uint8_t i;
+    uint8_t n;
+
+    if (max_len > UI_EDIT_TEXT_MAX_LEN) {
+        max_len = UI_EDIT_TEXT_MAX_LEN;
+    }
+    for (i = 0U; i < max_len; i++) {
+        work[i] = (i < existing_len) ? buf[i] : ' ';
+    }
+    work[max_len] = '\0';
+
+    wait_key_repeat_reset();
+    for (;;) {
+        uint8_t pressed;
+
+        cls();
+        printf("%s\n\n", label);
+        gotoxy(0U, 3U);
+        printf("%s\n", work);
+        gotoxy(cursor, 4U);
+        printf("^");
+        gotoxy(0U, 7U);
+        printf("LEFT/RIGHT: MOVE\nUP/DOWN: CHAR\nA: CONFIRM\nB: CANCEL\n(HOLD: FASTER)");
+
+        pressed = wait_key_repeat();
+        if (pressed != 0U) {
+            sound_select();
+        }
+        if (pressed & J_LEFT) {
+            cursor = (cursor == 0U) ? (uint8_t)(max_len - 1U) : (uint8_t)(cursor - 1U);
+        } else if (pressed & J_RIGHT) {
+            cursor = (uint8_t)((cursor + 1U) % max_len);
+        } else if (pressed & J_UP) {
+            uint8_t idx = (uint8_t)((text_charset_index(work[cursor]) + 1U) % TEXT_CHARSET_LEN);
+            work[cursor] = kTextCharset[idx];
+        } else if (pressed & J_DOWN) {
+            uint8_t idx = text_charset_index(work[cursor]);
+            idx = (idx == 0U) ? (uint8_t)(TEXT_CHARSET_LEN - 1U) : (uint8_t)(idx - 1U);
+            work[cursor] = kTextCharset[idx];
+        } else if (pressed & J_A) {
+            n = max_len;
+            while (n > 0U && work[n - 1U] == ' ') {
+                n--;
+            }
+            memcpy(buf, work, n);
+            buf[n] = '\0';
             return true;
         } else if (pressed & J_B) {
             return false;

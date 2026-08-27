@@ -1,18 +1,39 @@
 #include "test_runner.h"
 #include "magb_network.h"
+#include "magb_config.h"
 #include "magb_commands.h"
 #include "test_config.h"
 #include "gb00_auth.h"
 
-#include <gb/gb.h> /* vsync() only, for the P2P receive poll spacing below */
+#include <gb/gb.h> /* vsync(), joypad(); also used for the P2P receive poll spacing below */
+#include <gbdk/console.h> /* cls()/gotoxy(), for test_isp_raw_tcp()'s live view only --
+                            * every other test here reports through test_result_t and
+                            * never touches the screen directly */
 #include <string.h>
 #include <stdio.h>
+
+/* Diagnostic strings repeated across many of this file's tests (each
+ * ISP test hits the same "BEGIN SESSION FAILED"/kMsgDialIspFailed/...
+ * failure points independently) -- shared constants instead of a
+ * separate string literal per call site, since SDCC doesn't pool
+ * identical literals itself and this ROM has no mapper (32 KiB, see
+ * the Makefile's LCCFLAGS comment): with 8, 6, 6, 5, 5, 5, 4 and 3
+ * call sites respectively, this was worth well over a hundred bytes,
+ * the difference between fitting the on-screen keyboard and not. */
+static const char kMsgBeginSessionFailed[] = "BEGIN SESSION FAILED";
+static const char kMsgReadConfigFailed[]   = "READ CONFIG FAILED";
+static const char kMsgTransferTimeout[]    = "TRANSFER TIMEOUT";
+static const char kMsgDialIspFailed[]      = "DIAL ISP FAILED";
+static const char kMsgIspLoginFailed[]     = "ISP LOGIN FAILED";
+static const char kMsgDnsQueryFailed[]     = "DNS QUERY FAILED";
+static const char kMsgTcpOpenFailed[]      = "TCP OPEN FAILED";
+static const char kMsgPhoneStatusFailed[]  = "PHONE STATUS FAILED";
 
 /* ---- MATS: TestSuite-only P2P payload framing (Section 33) --------
  * This is carried *inside* MAGB Transfer Data (0x15) payloads. It is
  * not part of the Mobile Adapter protocol itself. */
 #define MATS_HEADER_LEN 7U /* magic(4) + version(1) + sequence(1) + length(1) */
-#define MATS_MAX_PAYLOAD 8U
+#define MATS_MAX_PAYLOAD 16U /* covers the "HELLO WORLD" (11 bytes) exchange below */
 #define MATS_VERSION 1U
 
 static uint8_t mats_build(uint8_t *out, uint8_t sequence,
@@ -114,7 +135,7 @@ void test_adapter_session(magb_context_t *ctx, test_result_t *out)
     out->actual = ctx->last_command_recv;
 
     if (r != MAGB_OK) {
-        result_fail(out, r, "BEGIN SESSION FAILED");
+        result_fail(out, r, kMsgBeginSessionFailed);
         sprintf(out->detail[1], "EXP %hx GOT %hx", (unsigned char)out->expected,
                 (unsigned char)out->actual);
         return;
@@ -147,7 +168,7 @@ void test_read_config(magb_context_t *ctx, uint8_t config_out[MAGB_CONFIG_SIZE],
     out->actual = ctx->last_command_recv;
 
     if (r != MAGB_OK) {
-        result_fail(out, r, "READ CONFIG FAILED");
+        result_fail(out, r, kMsgReadConfigFailed);
     } else {
         out->passed = true;
         sprintf(out->detail[0], "192 BYTES READ");
@@ -178,13 +199,108 @@ static void isp_http_cleanup(magb_context_t *ctx, uint8_t conn_id, bool have_con
     (void)magb_end_session(ctx);
 }
 
-void test_isp_http(magb_context_t *ctx, test_result_t *out,
+/* Copies printable bytes from a config field until a 0x00 byte or
+ * `max_len`, NUL-terminating. Config fields observed 0x00-padded past
+ * their actual content. */
+static void config_field_to_cstr(const uint8_t *field, uint8_t max_len,
+                                  char *out, uint8_t out_cap)
+{
+    uint8_t i;
+    uint8_t n = 0U;
+    for (i = 0U; i < max_len && n < (uint8_t)(out_cap - 1U); i++) {
+        if (field[i] == 0x00U) {
+            break;
+        }
+        out[n++] = (char)field[i];
+    }
+    out[n] = '\0';
+}
+
+/* Everything every ISP-touching test needs to read live from the
+ * adapter's own Read Configuration Data (0x19) response, rather than
+ * from compile-time TEST_* constants -- per the project owner's own
+ * request: "se algo exigir autenticacao, voce tem que ler todas as
+ * infos necessarias da config do adaptador". Only the password isn't
+ * here: it is never stored anywhere in the documented 192-byte
+ * configuration layout (see docs/dandocs-magb.md), so it has to come
+ * from the user (ui_edit_text(), the "ISP PASSWORD" menu entry --
+ * see main.c). There is no compile-time fallback for it -- an empty
+ * password is a hard failure for the tests that need one, via
+ * require_password() below, rather than a guessed value.
+ *
+ * Every field EXCEPT the password falls back to its TEST_*
+ * compile-time default if the config field is blank (an adapter that
+ * never ran Mobile Trainer registration), so this keeps working
+ * against libmobile's default unregistered config exactly like before
+ * this change. */
+typedef struct {
+    char login[MAGB_CONFIG_LOGIN_ID_LEN + 1U];
+    char phone[17]; /* worst case: 16 BCD digits/symbols + NUL */
+    char email[MAGB_CONFIG_EMAIL_LEN + 1U];
+    char smtp[MAGB_CONFIG_SMTP_LEN + 1U];
+    char pop[MAGB_CONFIG_POP_LEN + 1U];
+} magb_isp_identity_t;
+
+static magb_result_t read_isp_identity(magb_context_t *ctx, magb_isp_identity_t *out)
+{
+    uint8_t config[MAGB_CONFIG_SIZE];
+    magb_result_t r = magb_read_config(ctx, config);
+    if (r != MAGB_OK) {
+        return r;
+    }
+
+    config_field_to_cstr(&config[MAGB_CONFIG_OFF_LOGIN_ID], MAGB_CONFIG_LOGIN_ID_LEN,
+                          out->login, sizeof(out->login));
+    if (out->login[0] == '\0') {
+        strncpy(out->login, TEST_ISP_LOGIN, sizeof(out->login) - 1U);
+        out->login[sizeof(out->login) - 1U] = '\0';
+    }
+
+    if (magb_config_decode_phone(&config[MAGB_CONFIG_OFF_SLOT1], out->phone, sizeof(out->phone)) == 0U) {
+        strncpy(out->phone, TEST_ISP_PHONE, sizeof(out->phone) - 1U);
+        out->phone[sizeof(out->phone) - 1U] = '\0';
+    }
+
+    config_field_to_cstr(&config[MAGB_CONFIG_OFF_EMAIL], MAGB_CONFIG_EMAIL_LEN,
+                          out->email, sizeof(out->email));
+    config_field_to_cstr(&config[MAGB_CONFIG_OFF_SMTP], MAGB_CONFIG_SMTP_LEN,
+                          out->smtp, sizeof(out->smtp));
+    config_field_to_cstr(&config[MAGB_CONFIG_OFF_POP], MAGB_CONFIG_POP_LEN,
+                          out->pop, sizeof(out->pop));
+    return MAGB_OK;
+}
+
+/* Used only by tests that actually authenticate against a real
+ * account (GB00 HTTP, POP3) -- unlike Dial/ISP Login itself (which
+ * libmobile accepts with any password) or SMTP (which REON's own
+ * source accepts unauthenticated), these fail with a real 401/-ERR if
+ * the password is wrong, so this TestSuite must never guess one.
+ * isp_password[] in main.c starts empty (no compile-time "test"
+ * default -- see docs/protocol-notes.md for why one was removed) and
+ * is only ever set by the user via the ISP PASSWORD screen; this is
+ * the single check that turns "still empty" into an explicit,
+ * immediate failure instead of silently sending an empty password to
+ * the server and reporting whatever generic error comes back. Called
+ * before result_init() -- callers must not call result_init()
+ * themselves until after this returns true. */
+static bool require_password(test_result_t *out, const char *password)
+{
+    if (password[0] != '\0') {
+        return true;
+    }
+    result_init(out, MAGB_CMD_TRANSFER);
+    result_fail(out, MAGB_ERR_ISP, "SET ISP PASSWORD");
+    return false;
+}
+
+void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password,
                     const char *host, uint16_t port, const char *path)
 {
     static char s_request[224];
     magb_result_t r;
     magb_phone_status_t phone;
     magb_isp_login_result_t isp;
+    magb_isp_identity_t id;
     uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
     uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
     uint8_t host_ip[4];
@@ -199,32 +315,35 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out,
     result_init(out, MAGB_CMD_TRANSFER);
 
     r = magb_begin_session(ctx);
-    if (r != MAGB_OK) { result_fail(out, r, "BEGIN SESSION FAILED"); return; }
+    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
+
+    r = read_isp_identity(ctx, &id);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
 
     r = magb_telephone_status(ctx, &phone);
     if (r != MAGB_OK) {
-        result_fail(out, r, "PHONE STATUS FAILED");
+        result_fail(out, r, kMsgPhoneStatusFailed);
         (void)magb_end_session(ctx);
         return;
     }
 
-    r = magb_dial(ctx, TEST_ISP_PHONE);
+    r = magb_dial(ctx, id.phone);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "DIAL ISP FAILED", "20-000");
+        result_fail_code(out, r, kMsgDialIspFailed, "20-000");
         (void)magb_end_session(ctx);
         return;
     }
 
-    r = magb_isp_login(ctx, TEST_ISP_LOGIN, TEST_ISP_PASSWORD, dns1, dns2, &isp);
+    r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "ISP LOGIN FAILED", "25-000");
+        result_fail_code(out, r, kMsgIspLoginFailed, "25-000");
         isp_http_cleanup(ctx, 0U, false, false);
         return;
     }
 
     r = magb_dns_query(ctx, host, host_ip);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "DNS QUERY FAILED", "15-000");
+        result_fail_code(out, r, kMsgDnsQueryFailed, "15-000");
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
@@ -233,7 +352,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out,
 
     r = magb_tcp_open(ctx, host_ip, port, &conn_id);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "TCP OPEN FAILED", "24-000");
+        result_fail_code(out, r, kMsgTcpOpenFailed, "24-000");
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
@@ -325,41 +444,42 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out,
  * authentication" for the full derivation (round-trip tested against
  * REON's actual PHP decode function before this was written).
  *
- * The GB00 login (dionId) is read live from the adapter's own Read
- * Configuration Data (0x19) response (offset MAGB_CONFIG_OFF_LOGIN_ID,
- * the real "gXXXXXXXXX"-style registered ID -- see Dan Docs' Mobile
- * Adapter GB configuration layout), the same way the email tests read
- * the email/SMTP/POP fields -- not TEST_ISP_LOGIN. A real REON account
- * is provisioned against that registered ID, not an arbitrary string,
- * so hardcoding "test" here would 401 against any real deployment even
- * with perfectly correct crypto. TEST_ISP_PASSWORD is still used for
- * the password, since no password is ever stored in the adapter's
- * configuration memory (see CLAUDE.md's Test Configuration section). */
-#define GB00_RESP_BUF_SIZE 200U
+ * The GB00 login (dionId) and the Dial phone number are both read
+ * live from the adapter's own Read Configuration Data (0x19) response
+ * via read_isp_identity() (login: offset MAGB_CONFIG_OFF_LOGIN_ID, the
+ * real "gXXXXXXXXX"-style registered ID; phone: Configuration Slot 1,
+ * BCD-decoded -- see Dan Docs' Mobile Adapter GB configuration
+ * layout), the same way the email tests read the email/SMTP/POP
+ * fields -- not TEST_ISP_LOGIN/TEST_ISP_PHONE. A real REON account is
+ * provisioned against that registered ID, not an arbitrary string, so
+ * hardcoding "test" here would 401 against any real deployment even
+ * with perfectly correct crypto. The password is passed in from the
+ * caller (interactively entered via ui_edit_text(), see main.c) since
+ * no password is ever stored anywhere in the adapter's configuration
+ * memory (see CLAUDE.md's Test Configuration section). */
+/* 200 was measured to be too small against a real server: a real
+ * nginx 401 challenge response (Server/Date/Content-Type/Connection
+ * headers *plus* the ~81-byte WWW-Authenticate line) is 227 bytes on
+ * its own, confirmed from a real BGB link-log capture -- the
+ * WWW-Authenticate header landed past byte 200 and got silently
+ * truncated, so gb00_find_challenge() could never find a complete
+ * challenge and every News test failed before ever attempting the
+ * authenticated retry (independent of login/password, which the log
+ * showed were already correct). 360 covers that with margin, plus
+ * room for a real (larger, no WWW-Authenticate line but a binary body)
+ * 200 OK from get_news_parameters_bin()/get_news_file(). */
+#define GB00_RESP_BUF_SIZE 360U
 static uint8_t s_gb00_resp[GB00_RESP_BUF_SIZE];
-
-/* Copies printable bytes from a config field until a 0x00 byte or
- * `max_len`, NUL-terminating. Config fields observed 0x00-padded past
- * their actual content. Shared with the email tests further below. */
-static void config_field_to_cstr(const uint8_t *field, uint8_t max_len,
-                                  char *out, uint8_t out_cap)
-{
-    uint8_t i;
-    uint8_t n = 0U;
-    for (i = 0U; i < max_len && n < (uint8_t)(out_cap - 1U); i++) {
-        if (field[i] == 0x00U) {
-            break;
-        }
-        out[n++] = (char)field[i];
-    }
-    out[n] = '\0';
-}
 
 /* Sends one HTTP/1.0 GET (optionally with an extra header line, e.g.
  * "Authorization: ...\r\n", or NULL for none) over `conn_id` and
  * accumulates the response into s_gb00_resp. Mirrors test_isp_http()'s
  * receive loop, kept separate because this flow needs to do it twice
- * (once to provoke the 401, once with the computed Authorization). */
+ * (once to provoke the 401, once with the computed Authorization).
+ * GB00_RESP_BUF_SIZE exceeds 255, unlike HTTP_RESP_BUF_SIZE, so every
+ * per-call capacity passed to magb_transfer_data() (a uint8_t) is
+ * explicitly clamped to 255 rather than just cast, which would
+ * otherwise silently wrap for a "remaining space" value above 255. */
 static magb_result_t gb00_http_get(magb_context_t *ctx, uint8_t conn_id,
                                     const char *host, const char *path,
                                     const char *extra_header,
@@ -371,13 +491,15 @@ static magb_result_t gb00_http_get(magb_context_t *ctx, uint8_t conn_id,
     uint8_t empty_polls = 0U;
     uint8_t got_len;
     uint16_t req_len;
+    uint8_t cap0;
 
     sprintf(s_gb00_req, "GET %s HTTP/1.0\r\nHost: %s\r\n%s\r\n",
             path, host, (extra_header != NULL) ? extra_header : "");
     req_len = (uint16_t)strlen(s_gb00_req);
 
+    cap0 = (GB00_RESP_BUF_SIZE > 255U) ? 255U : (uint8_t)GB00_RESP_BUF_SIZE;
     r = magb_transfer_data(ctx, conn_id, (const uint8_t *)s_gb00_req, (uint8_t)req_len,
-                            &s_gb00_resp[0], (uint8_t)GB00_RESP_BUF_SIZE,
+                            &s_gb00_resp[0], cap0,
                             &got_len, remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
     if (r != MAGB_OK) {
         return r;
@@ -385,7 +507,8 @@ static magb_result_t gb00_http_get(magb_context_t *ctx, uint8_t conn_id,
     resp_len = got_len;
 
     while (!*remote_closed && resp_len < GB00_RESP_BUF_SIZE && empty_polls < HTTP_MAX_EMPTY_POLLS) {
-        uint8_t cap = (uint8_t)(GB00_RESP_BUF_SIZE - resp_len);
+        uint16_t remaining = (uint16_t)(GB00_RESP_BUF_SIZE - resp_len);
+        uint8_t cap = (remaining > 255U) ? 255U : (uint8_t)remaining;
         r = magb_transfer_data(ctx, conn_id, NULL, 0U,
                                 &s_gb00_resp[resp_len], cap,
                                 &got_len, remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
@@ -437,126 +560,228 @@ static bool gb00_status_code(const uint8_t *resp, uint16_t resp_len, char status
     return true;
 }
 
-void test_isp_http_gb00(magb_context_t *ctx, test_result_t *out,
-                         const char *host, uint16_t port, const char *path)
+/* Fetches one URL with REON's GB00 challenge/response auth: GET with
+ * no Authorization; if the response isn't a 401, done (no auth was
+ * required for this path). Otherwise finds the WWW-Authenticate
+ * challenge, computes the Authorization value, and re-sends the GET
+ * with it. Manages its own TCP connection (opens fresh, always closes
+ * before returning -- the caller only owns Begin Session/Dial/ISP
+ * Login/DNS around one or more calls to this). On MAGB_OK, `status`
+ * holds the final 3-digit HTTP status and `*resp_len` the final
+ * response's byte count (both from the auth retry if one happened,
+ * from the first GET otherwise); `*did_auth` records which. On
+ * failure, `*fail_stage` is a short human-readable label for
+ * `out->detail[]` (e.g. "NO WWW-AUTH HDR") and the return value is the
+ * `magb_result_t` to report (MAGB_ERR_ISP for an application-level
+ * parse failure that isn't itself a magb_result_t). */
+static magb_result_t gb00_fetch(magb_context_t *ctx, const uint8_t host_ip[4], uint16_t port,
+                                 const char *host, const char *path,
+                                 const char *login, const char *password,
+                                 char status[4], uint16_t *resp_len, bool *did_auth,
+                                 const char **fail_stage)
 {
+    uint8_t conn_id;
     magb_result_t r;
-    magb_phone_status_t phone;
-    magb_isp_login_result_t isp;
-    uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
-    uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
-    uint8_t host_ip[4];
-    uint8_t conn_id = 0U;
-    uint16_t resp_len;
     bool remote_closed;
     char challenge[GB00_CHALLENGE_LEN + 1U];
     static char auth_header[16U + GB00_AUTHORIZATION_LEN + 4U];
-    char status[4];
-    uint8_t config[MAGB_CONFIG_SIZE];
-    char gb00_login[MAGB_CONFIG_LOGIN_ID_LEN + 1U];
 
-    result_init(out, MAGB_CMD_TRANSFER);
-
-    r = magb_begin_session(ctx);
-    if (r != MAGB_OK) { result_fail(out, r, "BEGIN SESSION FAILED"); return; }
-
-    r = magb_read_config(ctx, config);
-    if (r != MAGB_OK) { result_fail(out, r, "READ CONFIG FAILED"); (void)magb_end_session(ctx); return; }
-    config_field_to_cstr(&config[MAGB_CONFIG_OFF_LOGIN_ID], MAGB_CONFIG_LOGIN_ID_LEN,
-                          gb00_login, sizeof(gb00_login));
-    if (gb00_login[0] == '\0') {
-        /* Adapter never registered via Mobile Trainer (config blank) --
-         * fall back to the compile-time login rather than failing
-         * outright; a real deployment will still reject it with 401,
-         * but this keeps the test runnable against libmobile's default
-         * unregistered config. */
-        strncpy(gb00_login, TEST_ISP_LOGIN, sizeof(gb00_login) - 1U);
-        gb00_login[sizeof(gb00_login) - 1U] = '\0';
-    }
-    /* detail[1] is only otherwise touched by "RX %u B" at the very end
-     * of this function (removed in favor of this) -- result_fail()
-     * only ever overwrites detail[0], so this survives to the result
-     * screen on every exit path, success or failure, which matters
-     * here specifically because a wrong login is the single most
-     * likely cause of a 401-after-retry. */
-    sprintf(out->detail[1], "LOGIN %s", gb00_login);
-
-    r = magb_telephone_status(ctx, &phone);
-    if (r != MAGB_OK) { result_fail(out, r, "PHONE STATUS FAILED"); (void)magb_end_session(ctx); return; }
-
-    r = magb_dial(ctx, TEST_ISP_PHONE);
-    if (r != MAGB_OK) { result_fail_code(out, r, "DIAL ISP FAILED", "20-000"); (void)magb_end_session(ctx); return; }
-
-    r = magb_isp_login(ctx, TEST_ISP_LOGIN, TEST_ISP_PASSWORD, dns1, dns2, &isp);
-    if (r != MAGB_OK) { result_fail_code(out, r, "ISP LOGIN FAILED", "25-000"); isp_http_cleanup(ctx, 0U, false, false); return; }
-
-    r = magb_dns_query(ctx, host, host_ip);
-    if (r != MAGB_OK) { result_fail_code(out, r, "DNS QUERY FAILED", "15-000"); isp_http_cleanup(ctx, 0U, false, true); return; }
-    sprintf(out->detail[0], "DNS %u.%u.%u.%u", host_ip[0], host_ip[1], host_ip[2], host_ip[3]);
+    *did_auth = false;
 
     r = magb_tcp_open(ctx, host_ip, port, &conn_id);
-    if (r != MAGB_OK) { result_fail_code(out, r, "TCP OPEN FAILED", "24-000"); isp_http_cleanup(ctx, 0U, false, true); return; }
+    if (r != MAGB_OK) { *fail_stage = kMsgTcpOpenFailed; return r; }
 
-    r = gb00_http_get(ctx, conn_id, host, path, NULL, &resp_len, &remote_closed);
-    if (r != MAGB_OK) { result_fail_code(out, r, "HTTP SEND FAILED", "32-000"); isp_http_cleanup(ctx, conn_id, true, true); return; }
+    r = gb00_http_get(ctx, conn_id, host, path, NULL, resp_len, &remote_closed);
+    if (r != MAGB_OK) {
+        (void)magb_tcp_close(ctx, conn_id);
+        *fail_stage = "HTTP SEND FAILED";
+        return r;
+    }
 
-    if (!gb00_status_code(s_gb00_resp, resp_len, status)) {
-        result_fail_code(out, MAGB_OK, "NO HTTP/ PREFIX", "15-000");
-        isp_http_cleanup(ctx, conn_id, true, true);
-        return;
+    if (!gb00_status_code(s_gb00_resp, *resp_len, status)) {
+        (void)magb_tcp_close(ctx, conn_id);
+        *fail_stage = "NO HTTP/ PREFIX";
+        return MAGB_ERR_ISP;
     }
 
     if (strncmp(status, "401", 3) != 0) {
         /* No auth needed after all (or something else entirely) --
          * report the status directly, same shape as test_isp_http(). */
-        isp_http_cleanup(ctx, conn_id, true, true);
-        out->passed = true;
-        out->result = MAGB_OK;
-        sprintf(out->detail[0], "HTTP STATUS %s", status);
-        sprintf(out->detail[1], "(NO AUTH NEEDED)");
-        sprintf(out->official_code, "32-%s", status);
-        return;
+        (void)magb_tcp_close(ctx, conn_id);
+        return MAGB_OK;
     }
 
-    if (!gb00_find_challenge(s_gb00_resp, resp_len, challenge)) {
-        result_fail_code(out, MAGB_OK, "NO WWW-AUTH HDR", "32-401");
-        isp_http_cleanup(ctx, conn_id, true, true);
-        return;
+    if (!gb00_find_challenge(s_gb00_resp, *resp_len, challenge)) {
+        (void)magb_tcp_close(ctx, conn_id);
+        *fail_stage = "NO WWW-AUTH HDR";
+        return MAGB_ERR_ISP;
     }
 
     /* REON's PHP closes the connection after the 401 (Connection: close
      * is implied by HTTP/1.0); re-open before the authenticated retry. */
     (void)magb_tcp_close(ctx, conn_id);
     r = magb_tcp_open(ctx, host_ip, port, &conn_id);
-    if (r != MAGB_OK) { result_fail_code(out, r, "TCP REOPEN FAILED", "24-000"); isp_http_cleanup(ctx, 0U, false, true); return; }
+    if (r != MAGB_OK) { *fail_stage = "TCP REOPEN FAILED"; return r; }
 
     {
         char auth_value[GB00_AUTHORIZATION_LEN + 1U];
-        gb00_build_authorization(challenge, gb00_login, TEST_ISP_PASSWORD, auth_value);
+        gb00_build_authorization(challenge, login, password, auth_value);
         sprintf(auth_header, "Authorization: GB00 name=\"%s\"\r\n", auth_value);
     }
 
-    r = gb00_http_get(ctx, conn_id, host, path, auth_header, &resp_len, &remote_closed);
-    if (r != MAGB_OK) { result_fail_code(out, r, "AUTH SEND FAILED", "32-000"); isp_http_cleanup(ctx, conn_id, true, true); return; }
+    r = gb00_http_get(ctx, conn_id, host, path, auth_header, resp_len, &remote_closed);
+    (void)magb_tcp_close(ctx, conn_id);
+    if (r != MAGB_OK) { *fail_stage = "AUTH SEND FAILED"; return r; }
 
-    isp_http_cleanup(ctx, conn_id, true, true);
+    if (!gb00_status_code(s_gb00_resp, *resp_len, status)) {
+        *fail_stage = "NO HTTP/ AFTER AUTH";
+        return MAGB_ERR_ISP;
+    }
 
-    out->tx_bytes = GB00_AUTHORIZATION_LEN;
-    out->rx_bytes = resp_len;
+    *did_auth = true;
+    return MAGB_OK;
+}
 
-    if (!gb00_status_code(s_gb00_resp, resp_len, status)) {
-        result_fail_code(out, MAGB_OK, "NO HTTP/ AFTER AUTH", "15-000");
+void test_isp_http_gb00(magb_context_t *ctx, test_result_t *out, const char *password,
+                         const char *host, uint16_t port, const char *path)
+{
+    magb_result_t r;
+    magb_phone_status_t phone;
+    magb_isp_login_result_t isp;
+    magb_isp_identity_t id;
+    uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
+    uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
+    uint8_t host_ip[4];
+    uint16_t resp_len;
+    bool did_auth;
+    char status[4];
+    const char *fail_stage;
+
+    if (!require_password(out, password)) { return; }
+    result_init(out, MAGB_CMD_TRANSFER);
+
+    r = magb_begin_session(ctx);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
+
+    r = read_isp_identity(ctx, &id);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
+    /* detail[1] is only otherwise touched right below, at the very end
+     * of this function -- result_fail() only ever overwrites detail[0],
+     * so this survives to the result screen on every exit path, success
+     * or failure, which matters here specifically because a wrong
+     * login is the single most likely cause of a 401-after-retry. */
+    sprintf(out->detail[1], "LOGIN %s", id.login);
+
+    r = magb_telephone_status(ctx, &phone);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgPhoneStatusFailed); (void)magb_end_session(ctx); return; }
+
+    r = magb_dial(ctx, id.phone);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, "20-000"); (void)magb_end_session(ctx); return; }
+
+    r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, "25-000"); isp_http_cleanup(ctx, 0U, false, false); return; }
+
+    /* Every hostname this test touches gets its own DNS Query (0x28)
+     * first -- there is exactly one here (`host`), queried once. */
+    r = magb_dns_query(ctx, host, host_ip);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, "15-000"); isp_http_cleanup(ctx, 0U, false, true); return; }
+
+    r = gb00_fetch(ctx, host_ip, port, host, path, id.login, password, status, &resp_len, &did_auth, &fail_stage);
+    if (r != MAGB_OK) {
+        result_fail_code(out, r, fail_stage, "32-401");
+        isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
 
+    isp_http_cleanup(ctx, 0U, false, true);
+    out->rx_bytes = resp_len;
     out->passed = true;
     out->result = MAGB_OK;
-    sprintf(out->detail[0], "AUTH -> HTTP %s", status);
-    /* detail[1] is left as the "LOGIN <id>" line set right after Read
-     * Config -- more useful here than the RX byte count (already in
-     * out->rx_bytes) for telling a crypto/transport bug apart from a
-     * wrong-account 401. */
+    sprintf(out->detail[0], did_auth ? "AUTH -> HTTP %s" : "HTTP %s (NO AUTH)", status);
+    /* detail[1] is left as the "LOGIN <id>" line set above. */
     sprintf(out->official_code, "32-%s", status);
+}
+
+/* Like test_isp_http_gb00(), but for the "NEWS ARTICLE" menu entry:
+ * mirrors what a real game actually does for the Goldenrod
+ * Communication Center news feature -- fetch the news *config* first
+ * (size, SRAM address, ranking layout; see news.php's
+ * get_news_parameters_bin()), then the news *article* itself
+ * (get_news_file()), in the same ISP session, one DNS query for the
+ * shared host. Both legitimately need their own GB00 challenge/
+ * response (this TestSuite does not rely on REON's optional 15-minute
+ * utility-auth session cache across separate connections -- see
+ * doAuth()'s $_SESSION['utility_authed_*'] path in auth.php -- since
+ * that isn't guaranteed by the documented protocol, just observed as
+ * an optimization the real client may use). */
+void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *password)
+{
+    magb_result_t r;
+    magb_phone_status_t phone;
+    magb_isp_login_result_t isp;
+    magb_isp_identity_t id;
+    uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
+    uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
+    uint8_t host_ip[4];
+    uint16_t resp_len;
+    bool did_auth;
+    char cfg_status[4];
+    char art_status[4];
+    const char *fail_stage;
+
+    if (!require_password(out, password)) { return; }
+    result_init(out, MAGB_CMD_TRANSFER);
+
+    r = magb_begin_session(ctx);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
+
+    r = read_isp_identity(ctx, &id);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
+    sprintf(out->detail[1], "LOGIN %s", id.login);
+
+    r = magb_telephone_status(ctx, &phone);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgPhoneStatusFailed); (void)magb_end_session(ctx); return; }
+
+    r = magb_dial(ctx, id.phone);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, "20-000"); (void)magb_end_session(ctx); return; }
+
+    r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, "25-000"); isp_http_cleanup(ctx, 0U, false, false); return; }
+
+    /* One DNS Query (0x28) for TEST_HTTP_HOST -- shared by both fetches
+     * below, since both paths live on the same host. */
+    r = magb_dns_query(ctx, TEST_HTTP_HOST, host_ip);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, "15-000"); isp_http_cleanup(ctx, 0U, false, true); return; }
+
+    r = gb00_fetch(ctx, host_ip, TEST_HTTP_PORT, TEST_HTTP_HOST, TEST_HTTP_NEWS_CONFIG_PATH,
+                    id.login, password, cfg_status, &resp_len, &did_auth, &fail_stage);
+    if (r != MAGB_OK) {
+        /* fail_stage (e.g. "NO HTTP/ AFTER AUTH", 19 chars) already
+         * fills most of detail[0]'s 20-char budget on its own -- no
+         * room for a "CONFIG: "/"ARTICLE: " prefix there. detail[1]
+         * (normally "LOGIN <id>") carries which stage failed instead. */
+        result_fail_code(out, r, fail_stage, "32-401");
+        strcpy(out->detail[1], "STAGE: CONFIG");
+        isp_http_cleanup(ctx, 0U, false, true);
+        return;
+    }
+    sprintf(out->detail[0], "CFG %s", cfg_status);
+
+    r = gb00_fetch(ctx, host_ip, TEST_HTTP_PORT, TEST_HTTP_HOST, TEST_HTTP_NEWS_PATH,
+                    id.login, password, art_status, &resp_len, &did_auth, &fail_stage);
+    if (r != MAGB_OK) {
+        result_fail_code(out, r, fail_stage, "32-401");
+        strcpy(out->detail[1], "STAGE: ARTICLE");
+        isp_http_cleanup(ctx, 0U, false, true);
+        return;
+    }
+
+    isp_http_cleanup(ctx, 0U, false, true);
+    out->rx_bytes = resp_len;
+    out->passed = true;
+    out->result = MAGB_OK;
+    sprintf(out->detail[0], "CFG %s ART %s", cfg_status, art_status);
+    sprintf(out->official_code, "32-%s", art_status);
 }
 
 /* ---- Test 2b/2c: ISP Email (SMTP send / POP3 receive) ------------------
@@ -669,11 +894,9 @@ static bool line_step(magb_context_t *ctx, uint8_t conn_id, const char *cmd,
     return strncmp(line, expect, strlen(expect)) == 0;
 }
 
-void test_isp_email_send(magb_context_t *ctx, test_result_t *out)
+void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *password)
 {
-    uint8_t config[MAGB_CONFIG_SIZE];
-    char email[MAGB_CONFIG_EMAIL_LEN + 1U];
-    char smtp_host[MAGB_CONFIG_SMTP_LEN + 1U];
+    magb_isp_identity_t id;
     uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
     uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
     magb_isp_login_result_t isp;
@@ -686,49 +909,41 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out)
     result_init(out, MAGB_CMD_TRANSFER);
 
     r = magb_begin_session(ctx);
-    if (r != MAGB_OK) { result_fail(out, r, "BEGIN SESSION FAILED"); return; }
+    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
 
-    r = magb_read_config(ctx, config);
-    if (r != MAGB_OK) {
-        result_fail(out, r, "READ CONFIG FAILED");
-        (void)magb_end_session(ctx);
-        return;
-    }
-    config_field_to_cstr(&config[MAGB_CONFIG_OFF_EMAIL], MAGB_CONFIG_EMAIL_LEN,
-                          email, sizeof(email));
-    config_field_to_cstr(&config[MAGB_CONFIG_OFF_SMTP], MAGB_CONFIG_SMTP_LEN,
-                          smtp_host, sizeof(smtp_host));
-    if (email[0] == '\0' || smtp_host[0] == '\0') {
+    r = read_isp_identity(ctx, &id);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
+    if (id.email[0] == '\0' || id.smtp[0] == '\0') {
         result_fail(out, MAGB_ERR_ISP, "NO EMAIL/SMTP IN CFG");
         (void)magb_end_session(ctx);
         return;
     }
-    strncpy(out->detail[0], email, sizeof(out->detail[0]) - 1U);
+    strncpy(out->detail[0], id.email, sizeof(out->detail[0]) - 1U);
 
-    r = magb_dial(ctx, TEST_ISP_PHONE);
+    r = magb_dial(ctx, id.phone);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "DIAL ISP FAILED", "20-000");
+        result_fail_code(out, r, kMsgDialIspFailed, "20-000");
         (void)magb_end_session(ctx);
         return;
     }
 
-    r = magb_isp_login(ctx, TEST_ISP_LOGIN, TEST_ISP_PASSWORD, dns1, dns2, &isp);
+    r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "ISP LOGIN FAILED", "25-000");
+        result_fail_code(out, r, kMsgIspLoginFailed, "25-000");
         isp_http_cleanup(ctx, 0U, false, false);
         return;
     }
 
-    r = magb_dns_query(ctx, smtp_host, host_ip);
+    r = magb_dns_query(ctx, id.smtp, host_ip);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "DNS QUERY FAILED", "15-000");
+        result_fail_code(out, r, kMsgDnsQueryFailed, "15-000");
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
 
     r = magb_tcp_open(ctx, host_ip, 25U, &conn_id);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "TCP OPEN FAILED", "24-000");
+        result_fail_code(out, r, kMsgTcpOpenFailed, "24-000");
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
@@ -746,14 +961,14 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out)
         return;
     }
 
-    sprintf(line, "MAIL FROM:<%s>\r\n", email);
+    sprintf(line, "MAIL FROM:<%s>\r\n", id.email);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "250", &r, &remote_closed)) {
         result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MAIL FROM REJECTED");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
-    sprintf(line, "RCPT TO:<%s>\r\n", email);
+    sprintf(line, "RCPT TO:<%s>\r\n", id.email);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "250", &r, &remote_closed)) {
         result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "RCPT TO REJECTED");
         isp_http_cleanup(ctx, conn_id, true, true);
@@ -782,11 +997,9 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out)
     sprintf(out->detail[1], "SENT OK");
 }
 
-void test_isp_email_recv(magb_context_t *ctx, test_result_t *out)
+void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *password)
 {
-    uint8_t config[MAGB_CONFIG_SIZE];
-    char email[MAGB_CONFIG_EMAIL_LEN + 1U];
-    char pop_host[MAGB_CONFIG_POP_LEN + 1U];
+    magb_isp_identity_t id;
     char user[MAGB_CONFIG_EMAIL_LEN + 1U];
     uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
     uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
@@ -798,29 +1011,22 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out)
     magb_result_t r;
     uint8_t i;
 
+    if (!require_password(out, password)) { return; }
     result_init(out, MAGB_CMD_TRANSFER);
 
     r = magb_begin_session(ctx);
-    if (r != MAGB_OK) { result_fail(out, r, "BEGIN SESSION FAILED"); return; }
+    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
 
-    r = magb_read_config(ctx, config);
-    if (r != MAGB_OK) {
-        result_fail(out, r, "READ CONFIG FAILED");
-        (void)magb_end_session(ctx);
-        return;
-    }
-    config_field_to_cstr(&config[MAGB_CONFIG_OFF_EMAIL], MAGB_CONFIG_EMAIL_LEN,
-                          email, sizeof(email));
-    config_field_to_cstr(&config[MAGB_CONFIG_OFF_POP], MAGB_CONFIG_POP_LEN,
-                          pop_host, sizeof(pop_host));
-    if (email[0] == '\0' || pop_host[0] == '\0') {
+    r = read_isp_identity(ctx, &id);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
+    if (id.email[0] == '\0' || id.pop[0] == '\0') {
         result_fail(out, MAGB_ERR_ISP, "NO EMAIL/POP IN CFG");
         (void)magb_end_session(ctx);
         return;
     }
     /* user = the local part of email, up to '@' -- no strchr() in
      * GBDK's minimal string.h, so a plain scan it is. */
-    strncpy(user, email, sizeof(user) - 1U);
+    strncpy(user, id.email, sizeof(user) - 1U);
     user[sizeof(user) - 1U] = '\0';
     for (i = 0U; user[i] != '\0'; i++) {
         if (user[i] == '@') {
@@ -828,32 +1034,32 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out)
             break;
         }
     }
-    strncpy(out->detail[0], email, sizeof(out->detail[0]) - 1U);
+    strncpy(out->detail[0], id.email, sizeof(out->detail[0]) - 1U);
 
-    r = magb_dial(ctx, TEST_ISP_PHONE);
+    r = magb_dial(ctx, id.phone);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "DIAL ISP FAILED", "20-000");
+        result_fail_code(out, r, kMsgDialIspFailed, "20-000");
         (void)magb_end_session(ctx);
         return;
     }
 
-    r = magb_isp_login(ctx, TEST_ISP_LOGIN, TEST_ISP_PASSWORD, dns1, dns2, &isp);
+    r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "ISP LOGIN FAILED", "25-000");
+        result_fail_code(out, r, kMsgIspLoginFailed, "25-000");
         isp_http_cleanup(ctx, 0U, false, false);
         return;
     }
 
-    r = magb_dns_query(ctx, pop_host, host_ip);
+    r = magb_dns_query(ctx, id.pop, host_ip);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "DNS QUERY FAILED", "15-000");
+        result_fail_code(out, r, kMsgDnsQueryFailed, "15-000");
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
 
     r = magb_tcp_open(ctx, host_ip, 110U, &conn_id);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "TCP OPEN FAILED", "24-000");
+        result_fail_code(out, r, kMsgTcpOpenFailed, "24-000");
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
@@ -872,7 +1078,7 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out)
         return;
     }
 
-    sprintf(line, "PASS %s\r\n", TEST_ISP_PASSWORD);
+    sprintf(line, "PASS %s\r\n", password);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "+OK", &r, &remote_closed)) {
         result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "LOGIN FAILED", "31-002");
         isp_http_cleanup(ctx, conn_id, true, true);
@@ -891,6 +1097,145 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out)
     out->passed = true;
     out->result = MAGB_OK;
     sprintf(out->detail[1], "MESSAGES: %u", parse_leading_uint(line + 4));
+}
+
+/* ---- Test 2d: ISP Raw TCP (interactive "netcat viewer") ---------------
+ * Matches the real "ISP call (PPP)" mode gba-link-connection's own
+ * LinkMobile documents: dial the ISP, open a TCP socket to an
+ * arbitrary address, and transfer arbitrary data -- no fixed request/
+ * response shape, no auth. Point `ip_digits` at a machine running
+ * `nc -l <port>`; whatever gets typed there streams to this ROM and is
+ * printed live, one incoming Transfer Data poll at a time, until the
+ * remote closes the connection or the user cancels with B.
+ *
+ * This is deliberately the one test in this file that does NOT return
+ * through a test_result_t -- there is no fixed "correct" response to
+ * validate, and the whole point is a live, open-ended view, which
+ * doesn't fit the "run once, report PASS/FAIL" shape every other test
+ * here uses. It draws its own screen directly (cls()/gotoxy()/printf())
+ * instead, the same way ui_show_trace()/ui_show_config() do in ui.c --
+ * unlike those, this one has to live here rather than in ui.c because
+ * it's interleaved with live magb_network.h calls, not a fixed buffer
+ * to render once.
+ *
+ * Received bytes are printed through GBDK's stock console, which wraps
+ * back to the top of the screen once full (it does not implement true
+ * scrolling) -- long output will eventually overwrite the header; this
+ * is a known, accepted limitation of a deliberately simple viewer. */
+static void wait_ab(void)
+{
+    for (;;) {
+        vsync();
+        if (joypad() & (J_A | J_B)) {
+            return;
+        }
+    }
+}
+
+static void parse_ip12(const char *digits, uint8_t ip[4])
+{
+    uint8_t i;
+    for (i = 0U; i < 4U; i++) {
+        ip[i] = (uint8_t)((digits[i * 3U] - '0') * 100
+                         + (digits[i * 3U + 1U] - '0') * 10
+                         + (digits[i * 3U + 2U] - '0'));
+    }
+}
+
+#define RAW_TCP_POLL_BUF_SIZE 32U
+
+void test_isp_raw_tcp(magb_context_t *ctx, const char *ip_digits, uint16_t port)
+{
+    magb_isp_identity_t id;
+    uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
+    uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
+    magb_isp_login_result_t isp;
+    uint8_t ip[4];
+    uint8_t conn_id = 0U;
+    uint8_t buf[RAW_TCP_POLL_BUF_SIZE];
+    uint8_t got_len;
+    bool remote_closed = false;
+    bool have_conn = false;
+    bool logged_in = false;
+    magb_result_t r;
+    const char *end_reason = "ENDED";
+
+    cls();
+    printf("ISP RAW TCP\n\n");
+
+    r = magb_begin_session(ctx);
+    if (r != MAGB_OK) { printf("BEGIN SESSION FAILED\n"); goto done_no_cleanup; }
+
+    r = read_isp_identity(ctx, &id);
+    if (r != MAGB_OK) { printf("READ CONFIG FAILED\n"); (void)magb_end_session(ctx); goto done_no_cleanup; }
+
+    r = magb_dial(ctx, id.phone);
+    if (r != MAGB_OK) { printf("DIAL ISP FAILED\n"); (void)magb_end_session(ctx); goto done_no_cleanup; }
+
+    r = magb_isp_login(ctx, id.login, "", dns1, dns2, &isp);
+    if (r != MAGB_OK) { printf("ISP LOGIN FAILED\n"); isp_http_cleanup(ctx, 0U, false, false); goto done_no_cleanup; }
+    logged_in = true;
+
+    parse_ip12(ip_digits, ip);
+    r = magb_tcp_open(ctx, ip, port, &conn_id);
+    if (r != MAGB_OK) { printf("TCP OPEN FAILED\n"); isp_http_cleanup(ctx, 0U, false, true); goto done_no_cleanup; }
+    have_conn = true;
+
+    printf("%u.%u.%u.%u:%u\nB: STOP\n\n", ip[0], ip[1], ip[2], ip[3], port);
+
+    for (;;) {
+        if (ctx->cancel_check != NULL && ctx->cancel_check()) {
+            end_reason = "STOPPED (B)";
+            break;
+        }
+        r = magb_transfer_data(ctx, conn_id, NULL, 0U, buf, (uint8_t)(RAW_TCP_POLL_BUF_SIZE - 1U),
+                                &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_SHORT);
+        if (r == MAGB_ERR_TIMEOUT) {
+            continue; /* nothing arrived within this poll window -- keep waiting */
+        }
+        if (r != MAGB_OK) {
+            end_reason = "XFER ERROR";
+            break;
+        }
+        if (got_len > 0U) {
+            uint8_t i;
+            for (i = 0U; i < got_len; i++) {
+                uint8_t c = buf[i];
+                /* Binary-safe display: pass through newlines (so lines
+                 * typed at `nc` look right) but replace other control
+                 * bytes, matching print_ascii_field()'s convention
+                 * elsewhere in this project rather than assuming the
+                 * peer only ever sends printable text. */
+                if (c < 0x20U && c != '\n' && c != '\r') {
+                    c = '.';
+                }
+                putchar((char)c);
+            }
+        }
+        if (remote_closed) {
+            end_reason = "REMOTE CLOSED";
+            break;
+        }
+        if (got_len == 0U) {
+            vsync();
+        }
+    }
+
+    /* conn_id is already 0 whenever have_conn is false (its initializer
+     * above), so no ternary is needed here -- avoids a spurious SDCC
+     * "conditional flow changed by optimizer" warning that a ternary
+     * in this exact spot was triggering. */
+    isp_http_cleanup(ctx, conn_id, have_conn, logged_in);
+
+    gotoxy(0U, 17U);
+    printf("%s -- A/B:MENU", end_reason);
+    wait_ab();
+    return;
+
+done_no_cleanup:
+    gotoxy(0U, 17U);
+    printf("A/B:MENU");
+    wait_ab();
 }
 
 /* ---- Test 3: P2P Caller / Listener ------------------------------------ */
@@ -971,7 +1316,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     result_init(out, MAGB_CMD_DIAL);
 
     r = magb_begin_session(ctx);
-    if (r != MAGB_OK) { result_fail(out, r, "BEGIN SESSION FAILED"); return; }
+    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
 
     r = magb_dial(ctx, number);
     if (r != MAGB_OK) {
@@ -984,7 +1329,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     if (r != MAGB_OK) { result_fail(out, r, "PING SEND FAILED"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
-    if (r != MAGB_OK) { result_fail(out, r, "TRANSFER TIMEOUT"); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
     if (recv_len != 4U || memcmp(recv_payload, "PONG", 4U) != 0 || recv_seq != 1U) {
         result_fail(out, MAGB_ERR_P2P, "BAD TEST FRAME");
         p2p_cleanup(ctx);
@@ -995,10 +1340,27 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     if (r != MAGB_OK) { result_fail(out, r, "PATTERN SEND FAILED"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
-    if (r != MAGB_OK) { result_fail(out, r, "TRANSFER TIMEOUT"); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
     if (recv_len != sizeof(pattern) || memcmp(recv_payload, pattern, sizeof(pattern)) != 0 ||
             recv_seq != 2U) {
         result_fail(out, MAGB_ERR_P2P, "BAD PAYLOAD");
+        p2p_cleanup(ctx);
+        return;
+    }
+
+    /* PING/PONG and the binary pattern above already prove the link
+     * byte-for-byte, including 0x00/0xFF edge cases -- this step adds
+     * nothing new protocol-wise. It exists purely so the result screen
+     * can show an actual human-readable message that made it across
+     * the link and back, as a plain, at-a-glance "yes, this really
+     * worked" on top of the raw byte counts. */
+    r = p2p_send_frame(ctx, 3U, (const uint8_t *)"HELLO WORLD", 11U);
+    if (r != MAGB_OK) { result_fail(out, r, "HELLO SEND FAILED"); p2p_cleanup(ctx); return; }
+
+    r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
+    if (recv_len != 11U || memcmp(recv_payload, "HELLO WORLD", 11U) != 0 || recv_seq != 3U) {
+        result_fail(out, MAGB_ERR_P2P, "BAD HELLO ECHO");
         p2p_cleanup(ctx);
         return;
     }
@@ -1007,10 +1369,10 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
 
     out->passed = true;
     out->result = MAGB_OK;
-    out->tx_bytes = 4U + sizeof(pattern);
-    out->rx_bytes = 4U + sizeof(pattern);
+    out->tx_bytes = (uint16_t)(4U + sizeof(pattern) + 11U);
+    out->rx_bytes = (uint16_t)(4U + sizeof(pattern) + 11U);
     sprintf(out->detail[0], "TX %u RX %u", out->tx_bytes, out->rx_bytes);
-    sprintf(out->detail[1], "DATA OK");
+    sprintf(out->detail[1], "HELLO WORLD OK");
 }
 
 void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
@@ -1023,7 +1385,7 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     result_init(out, MAGB_CMD_WAIT_CALL);
 
     r = magb_begin_session(ctx);
-    if (r != MAGB_OK) { result_fail(out, r, "BEGIN SESSION FAILED"); return; }
+    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
 
     r = magb_wait_for_call(ctx, MAGB_TIMEOUT_FRAMES_LONG * 4U);
     if (r == MAGB_ERR_CANCELLED) {
@@ -1038,7 +1400,7 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
-    if (r != MAGB_OK) { result_fail(out, r, "TRANSFER TIMEOUT"); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
     if (recv_len != 4U || memcmp(recv_payload, "PING", 4U) != 0) {
         result_fail(out, MAGB_ERR_P2P, "BAD TEST FRAME");
         p2p_cleanup(ctx);
@@ -1049,17 +1411,32 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     if (r != MAGB_OK) { result_fail(out, r, "PONG SEND FAILED"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
-    if (r != MAGB_OK) { result_fail(out, r, "TRANSFER TIMEOUT"); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
 
     r = p2p_send_frame(ctx, recv_seq, recv_payload, recv_len);
     if (r != MAGB_OK) { result_fail(out, r, "ECHO SEND FAILED"); p2p_cleanup(ctx); return; }
+
+    /* Third round-trip: the caller's human-readable "HELLO WORLD"
+     * message (see test_p2p_caller()) -- echoed back generically like
+     * the pattern step above, since this side doesn't need to know
+     * what the payload actually is to prove the link works both ways. */
+    {
+        uint8_t hello_len;
+        r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &hello_len);
+        if (r != MAGB_OK) { result_fail(out, r, kMsgTransferTimeout); p2p_cleanup(ctx); return; }
+
+        r = p2p_send_frame(ctx, recv_seq, recv_payload, hello_len);
+        if (r != MAGB_OK) { result_fail(out, r, "ECHO SEND FAILED"); p2p_cleanup(ctx); return; }
+
+        recv_len = (uint8_t)(recv_len + hello_len);
+    }
 
     p2p_cleanup(ctx);
 
     out->passed = true;
     out->result = MAGB_OK;
-    out->tx_bytes = (uint16_t)(4U + recv_len);
-    out->rx_bytes = (uint16_t)(4U + recv_len);
+    out->tx_bytes = (uint16_t)(8U + recv_len);
+    out->rx_bytes = (uint16_t)(8U + recv_len);
     sprintf(out->detail[0], "TX %u RX %u", out->tx_bytes, out->rx_bytes);
-    sprintf(out->detail[1], "DATA OK");
+    sprintf(out->detail[1], "HELLO WORLD OK");
 }

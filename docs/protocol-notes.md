@@ -462,7 +462,7 @@ comes from LinkMobile/Dan Docs, not from libmobile's own source.
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 2 | magic |
-| 2 | 1 | registration state (bit 0 = registered) |
+| 2 | 1 | registration state (`0x81` = complete, `0x01` = pending -- see below) |
 | 3 | 1 | (unused) |
 | 4 | 4 | primary DNS (IPv4) |
 | 8 | 4 | secondary DNS (IPv4) |
@@ -478,11 +478,9 @@ comes from LinkMobile/Dan Docs, not from libmobile's own source.
 | 166 | 24 | configuration slot 3 |
 | 190 | 2 | checksum |
 
-`ui_show_config()` (`src/app/ui.c`) displays magic, registration state,
-both DNS servers, the login ID, and the email field; it does not
-attempt to parse the 24-byte configuration-slot sub-structure, whose
-internal byte layout is not independently confirmed by any source this
-TestSuite has read.
+`ui_show_config()` (`src/app/ui.c`) displays this across three pages:
+magic/registration-state/DNS/login ID/checksum validity; email/SMTP/
+POP; and Configuration Slot 1's decoded phone number + ID string.
 
 **Independently confirmed** by `docs/dandocs-magb.md` (Dan Docs'
 "Configuration Data" section, converted to Markdown by the project
@@ -493,9 +491,47 @@ configuration slots, `0xBE`-`0xBF` checksum) -- two independent
 sources (a real GBA title's own parser, and Dan Docs' reverse
 engineering) now agree byte-for-byte. Dan Docs additionally documents
 the login ID's real format as `gXXXXXXXXX` (a literal `g` followed by
-digits) and the checksum as a 16-bit additive sum of bytes `0x00`-`0xBD`
-(not yet independently validated by this TestSuite's own `19` reads,
-since `ui_show_config()` displays the field but does not verify it).
+digits) and the checksum as a 16-bit additive sum of bytes `0x00`-`0xBD`.
+
+**Registration state byte, corrected.** The original implementation
+checked bit 0 (`config[2] & 0x01`) to decide "(REG)" vs "(NONE)". Both
+of Dan Docs' documented values -- `0x01` ("registration in progress")
+and `0x81` ("registration complete") -- have bit 0 set, so that check
+could never actually tell them apart; it happened to always print
+"(REG)" whenever *either* was present. Caught by comparing against a
+real captured config file (`config.bin`, from libmobile-bgb) that had
+byte 2 = `0x01`, not `0x81`. Fixed (`src/protocol/magb_config.c`'s
+`MAGB_REG_STATE_COMPLETE`/`MAGB_REG_STATE_PENDING`) to compare the
+whole byte against both documented values, showing "(PENDING)" as a
+distinct third state.
+
+**Configuration Slot decoding, implemented and verified.**
+`src/protocol/magb_config.c` (`magb_config_decode_phone()`,
+`magb_config_checksum_ok()`) decodes a slot's 8-byte BCD phone number
+(`0xA`='#', `0xB`='*', `0xF`=end-of-number, read high-nibble-then-low,
+byte by byte) and validates the trailing checksum. Both were verified
+against `config.bin`, a real 512-byte configuration file the project
+owner captured from an actual libmobile-bgb session (the first 192
+bytes are byte-for-byte what a real `0x19` response contains; the rest
+is libmobile-bgb's own on-disk container format, out of scope) --
+`tests/host/test_config.c` reads that file directly and asserts:
+Slot 1's phone decodes to `"#9677"` and its ID string is
+`"DION PDC/CDMAONE"` (Dan Docs' exact documented PDC/CDMA default,
+confirming Mobile Trainer really did write this slot for real), the
+checksum at `0xBE`-`0xBF` (`0x353D` in this capture) matches the
+additive sum of bytes `0x00`-`0xBD` exactly, and Slot 2/3 (untouched,
+all-`0xFF` phone bytes) decode to an empty string rather than garbage.
+This is the first host test in this project to validate against a
+real captured artifact instead of a hand-built vector -- see
+`tests/host/test_config.c`'s header comment.
+
+**Every ISP-touching test now dials Slot 1's real phone number**, not
+`TEST_ISP_PHONE`, via the same `read_isp_identity()` helper
+(`test_runner.c`) that already read login ID/email/SMTP/POP live --
+per the project owner's explicit request that anything needing
+authentication read everything it can from the adapter's own config
+rather than compile-time constants. `TEST_ISP_PHONE`/`TEST_ISP_LOGIN`
+are now purely fallback defaults for an unregistered (blank) config.
 
 ## GB00 HTTP authentication
 
@@ -577,31 +613,82 @@ the challenge-issuing and validation code paths derive the identical
 (`GB00 name="<92 chars>"`) is exactly right (`substr($authString, 11)`
 strips precisely `GB00 name="`, 11 characters). No bug was found in
 this TestSuite's own crypto or request construction on this second
-pass. Two causes remain that are **outside this ROM's control** and
-should be checked server-side before assuming another client bug:
+pass. At the time, two causes were suspected to be outside this ROM's
+control (PHP dropping the `Authorization` header before it reaches
+`doAuth()`; a wrong account password) -- **both ruled out** by the fix
+below, found from a real BGB link-log capture.
 
-1. `doAuth()` reads the challenge response from
-   `$_SERVER["HTTP_AUTHORIZATION"]`. Many PHP deployments (PHP-FPM
-   behind Nginx especially, but also some Apache+mod_php configs)
-   never populate this for the literal `Authorization` header unless
-   explicitly configured to pass it through (Apache:
-   `CGIPassAuth On`; Nginx: an explicit `fastcgi_param
-   HTTP_AUTHORIZATION $http_authorization;`). If the server under test
-   has this gap, `isset($_SERVER["HTTP_AUTHORIZATION"])` is false even
-   on the authenticated retry, so the server treats it as a brand-new,
-   unauthenticated request and issues a **fresh** 401 -- which looks
-   identical, from this ROM's side, to a rejected/invalid Authorization
-   value. Worth confirming server-side (e.g. `var_dump($_SERVER)` in a
-   throwaway PHP script on that deployment) before debugging the ROM
-   further.
-2. `validateAuthData()` looks up `dion_ppp_id` and compares
-   `md5($challenge.$log_in_password)`. If the account's real
-   `log_in_password` in `sys_users` isn't `TEST_ISP_PASSWORD`, this
-   fails regardless of everything else being correct. This is
-   independently testable: **Email Send/Recv** exercise the exact same
-   `TEST_ISP_PASSWORD` against the same account's mail credentials (see
-   "ISP Email" below) -- if those also fail to authenticate, the
-   password (not GB00-specific logic) is the shared root cause.
+**Actual root cause, found 2026-08-27: `GB00_RESP_BUF_SIZE` was too
+small.** The project owner's own account credentials
+(`g000000034`/`pass157`, confirmed correct) were being sent correctly
+in the ISP Login packet the whole time -- the log proved the ROM never
+even got as far as attempting the authenticated retry. A real 401
+response from the actual nginx-fronted server is:
+
+```
+HTTP/1.1 401 Unauthorized
+Server: nginx/1.27.0
+Date: Thu, 27 Aug 2026 12:17:39 GMT
+Content-Type: text/html; charset=UTF-8
+Connection: close
+WWW-Authenticate: GB00 name="<48-char challenge>"
+
+```
+
+227 bytes total -- but `gb00_http_get()`'s response buffer
+(`GB00_RESP_BUF_SIZE`) was only `200`. The `WWW-Authenticate` line
+starts at byte 145 and needs 82 more bytes to complete; only 55 fit
+before the buffer's cap silently stopped accumulating. `gb00_find_challenge()`
+correctly located the `WWW-Authenticate:` label (it's within the first
+200 bytes) but then couldn't read a complete 48-character quoted
+challenge past the truncation point, so it correctly reported
+"NO WWW-AUTH HDR" -- every News test failed at that exact point, before
+ever building an `Authorization` header, regardless of how correct the
+crypto or credentials were. A minimal/synthetic test response (as used
+during this feature's original host-side verification) never exercises
+this, since it has no `Server`/`Date` lines pushing the challenge past
+byte 200.
+
+**Fix**: `GB00_RESP_BUF_SIZE` raised from `200` to `360` (real 401 is
+227 bytes; a real 200 OK from `get_news_parameters_bin()`/
+`get_news_file()` has a binary body instead of the `WWW-Authenticate`
+line but no hard upper bound was derivable from the PHP source alone,
+so 360 leaves comfortable margin). Since `360 > 255`, the per-call
+capacity passed to `magb_transfer_data()` (a `uint8_t`) is now
+explicitly clamped to `255` instead of just cast from
+`GB00_RESP_BUF_SIZE`, which would otherwise silently wrap for a
+"remaining space" value above 255 -- a latent bug that would have
+resurfaced the moment the buffer grew past one byte's addressable
+range, caught while making this fix rather than shipped separately.
+
+**"NEWS ARTICLE" now performs the real game's full two-request flow**
+(`test_isp_news_article()`, added per the project owner's request --
+"no teste do article, ele deve fazer o fluxo completo, incluindo o
+news config antes e depois o news article"): one Begin Session/Dial/
+ISP Login/DNS Query, then `get_news_parameters_bin()`
+(`config.php` -- news size, the SRAM address to store it at, and the
+ranking-submission SRAM layout) followed by `get_news_file()`
+(`100.news.php` -- the actual news content), each with its own GB00
+challenge/response over its own TCP connection. "NEWS CONFIG" remains
+available separately as an isolated single-request diagnostic
+(`test_isp_http_gb00()`).
+
+This deliberately does **not** rely on REON's optional 15-minute
+utility-auth session cache (`auth.php`'s
+`$_SESSION['utility_authed_user_id']`/`_until`, checked at the top of
+`doAuth()`'s `type==2` branch) to skip the second challenge --
+`references/reon/web/cgb/pokemon/news.php`'s own comment on that path
+says only that "the official client... may not perform an additional
+401-challenge retry," not that it never does. Doing the full
+challenge/response twice is still correct against the documented
+protocol either way, and doesn't depend on a same-cookie-less PHP
+session actually being resumable across this TestSuite's own
+close-then-reopen TCP connections, which was never independently
+verified.
+
+A shared `gb00_fetch()` helper (`test_runner.c`) implements "GET, if
+401 then challenge/respond, GET again" once; both
+`test_isp_http_gb00()` and `test_isp_news_article()` call it per URL.
 
 **Credentials**: `validateAuthData()` looks up the account by
 `dion_ppp_id` and checks the password against the same
@@ -637,15 +724,25 @@ against all 6 RFC 1321 test vectors independently (i.e. not merely
 self-consistent with the round-trip test, which alone couldn't have
 caught an MD5-specific bug shared by both sides).
 
-**No mapper/save added for this.** GB00 needs a login+password, but
-that's the same REON account already used for ISP Login and the POP3
-test (`TEST_ISP_LOGIN`/`TEST_ISP_PASSWORD`) -- a compile-time constant
-was sufficient, so this TestSuite's cartridge type stayed `0x00` (ROM
-ONLY, no MBC, no battery-backed SRAM). If you want to edit these
-credentials from the running ROM instead of recompiling (the way the
-P2P number is editable), that would need a real MBC with save RAM
-(e.g. MBC5+RAM+BATTERY) and a text-entry UI, neither of which exists
-yet.
+**No mapper/save added for this -- a text-entry screen instead.** GB00
+needs a login+password, and it's the same REON account already used
+for ISP Login and the POP3 test. The login ID *is* stored in the
+adapter's own configuration and is read from there live (see "Read
+Configuration Data" above); the password is not (no password field
+exists anywhere in the documented 192-byte layout), so it can't come
+from Read Config no matter what. Originally this used a compile-time
+`TEST_ISP_PASSWORD` constant; per the project owner's explicit request
+("a senha deve ser perguntada para o usuario"), there is now an
+"ISP PASSWORD" main-menu entry (`ui_edit_text()` in `src/app/ui.c`, a
+character-cycling text editor modeled on the existing P2P-number
+digit editor) that edits a session-wide RAM buffer
+(`isp_password[]` in `main.c`, seeded from `TEST_ISP_PASSWORD`) used
+by every ISP-touching test. This still needed no mapper/save: the
+buffer is plain RAM, reset to the compile-time default on power-off,
+and this TestSuite's cartridge type stayed `0x00` (ROM ONLY, no MBC,
+no battery-backed SRAM). A real MBC with save RAM (e.g.
+MBC5+RAM+BATTERY) would only be needed if the password had to survive
+a power cycle, which was never asked for.
 
 ## Official Mobile Adapter GB error codes
 
