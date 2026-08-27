@@ -39,6 +39,16 @@
 #define MAGB_CMD_UDP_CLOSE         0x26U
 #define MAGB_CMD_DNS               0x28U
 
+/* Never sent as a request; substituted by the adapter for the response
+ * *command* byte of ANY of the above requests to report that request
+ * failed (Dan Docs, "6E - Error Status"; confirmed on real BGB/
+ * libmobile-bgb -- a P2P Transfer Data poll came back as 0x6E|0x80 with
+ * payload [0x15, 0x00], i.e. "Transfer Data: invalid connection /
+ * communication failed", after the far end's P2P connection dropped).
+ * Payload is 2 bytes: [0] the command that failed, [1] a command-
+ * specific error code -- recognized centrally in magb_execute(). */
+#define MAGB_CMD_ERROR_STATUS      0x6EU
+
 /* Mobile Adapter device IDs (libmobile/commands.h: enum mobile_adapter_device). */
 #define MAGB_DEVICE_GAMEBOY        0x00U /* what this TestSuite always identifies as */
 #define MAGB_DEVICE_GAMEBOY_ADVANCE 0x01U
