@@ -29,6 +29,13 @@ static const char kMsgDnsQueryFailed[]     = "DNS QUERY FAILED";
 static const char kMsgTcpOpenFailed[]      = "TCP OPEN FAILED";
 static const char kMsgPhoneStatusFailed[]  = "PHONE STATUS FAILED";
 
+/* Shared between test_isp_email_send() (which writes this exact header
+ * line into the test message) and delete_matching_test_emails() (which
+ * scans POP3 headers for it) -- the two must never drift apart, since
+ * the delete only removes messages carrying this ROM's own test
+ * subject line, never anything else in the mailbox. */
+#define kTestEmailSubjectLine "Subject: MAGB TestSuite"
+
 /* ---- MATS: TestSuite-only P2P payload framing (Section 33) --------
  * This is carried *inside* MAGB Transfer Data (0x15) payloads. It is
  * not part of the Mobile Adapter protocol itself. */
@@ -824,6 +831,28 @@ static magb_result_t tcp_send_line(magb_context_t *ctx, uint8_t conn_id, const c
 
 #define LINE_RECV_MAX_POLLS 60U
 
+/* A single TCP receive can carry more than one protocol line -- a real
+ * BGB/libmobile-bgb capture showed an SMTP server reply "250 OK\r\n"
+ * and a second, unrelated "500 command not recognized\r\n" line
+ * arriving together in one Transfer Data response. tcp_recv_line()
+ * below only wants the first line at a time, but must not throw away
+ * whatever comes after it in the same chunk -- POP3 header scanning in
+ * particular (see delete_matching_test_emails()) reads many lines in a
+ * row and would desync if any got silently dropped here. Bytes past
+ * the first '\n' are stashed here and drained before the next real
+ * network read. Reset via tcp_line_reset() right after each fresh
+ * magb_tcp_open(), so leftovers from a previous connection can never
+ * bleed into a new one. */
+static uint8_t s_line_pending[MAGB_MAX_PAYLOAD];
+static uint8_t s_line_pending_len;
+static uint8_t s_line_pending_pos;
+
+static void tcp_line_reset(void)
+{
+    s_line_pending_len = 0U;
+    s_line_pending_pos = 0U;
+}
+
 /* Accumulates response bytes into `buf` (always NUL-terminated) until
  * a '\n' is seen, the connection closes, or LINE_RECV_MAX_POLLS is
  * exhausted -- whichever comes first. Returns whatever was
@@ -849,19 +878,37 @@ static magb_result_t tcp_recv_line(magb_context_t *ctx, uint8_t conn_id,
         if (cap == 0U) {
             break;
         }
-        r = magb_transfer_data(ctx, conn_id, NULL, 0U,
-                                (uint8_t *)&buf[len], cap, &got_len, &closed,
-                                MAGB_TIMEOUT_FRAMES_LONG);
-        if (r != MAGB_OK) {
-            return r;
+
+        if (s_line_pending_pos < s_line_pending_len) {
+            got_len = (uint8_t)(s_line_pending_len - s_line_pending_pos);
+            if (got_len > cap) {
+                got_len = cap;
+            }
+            memcpy(&buf[len], &s_line_pending[s_line_pending_pos], got_len);
+            s_line_pending_pos = (uint8_t)(s_line_pending_pos + got_len);
+        } else {
+            r = magb_transfer_data(ctx, conn_id, NULL, 0U,
+                                    (uint8_t *)&buf[len], cap, &got_len, &closed,
+                                    MAGB_TIMEOUT_FRAMES_LONG);
+            if (r != MAGB_OK) {
+                return r;
+            }
+            if (closed) {
+                *remote_closed = true;
+                break;
+            }
         }
-        if (closed) {
-            *remote_closed = true;
-            break;
-        }
+
         for (i = 0U; i < got_len; i++) {
             if (buf[len + i] == '\n') {
-                len = (uint8_t)(len + i + 1U);
+                uint8_t consumed = (uint8_t)(i + 1U);
+                uint8_t leftover = (uint8_t)(got_len - consumed);
+                if (leftover > 0U) {
+                    memcpy(s_line_pending, &buf[len + consumed], leftover);
+                    s_line_pending_len = leftover;
+                    s_line_pending_pos = 0U;
+                }
+                len = (uint8_t)(len + consumed);
                 buf[len] = '\0';
                 return MAGB_OK;
             }
@@ -947,6 +994,7 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
+    tcp_line_reset();
 
     r = tcp_recv_line(ctx, conn_id, line, sizeof(line), &remote_closed);
     if (r != MAGB_OK || strncmp(line, "220", 3) != 0) {
@@ -982,7 +1030,7 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
     }
 
     if (!line_step(ctx, conn_id,
-            "Subject: MAGB TestSuite\r\n\r\nHello from the Mobile Adapter GB TestSuite ROM.\r\n.\r\n",
+            kTestEmailSubjectLine "\r\n\r\nHello from the Mobile Adapter GB TestSuite ROM.\r\n.\r\n",
             line, sizeof(line), "250", &r, &remote_closed)) {
         result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MESSAGE REJECTED");
         isp_http_cleanup(ctx, conn_id, true, true);
@@ -995,6 +1043,74 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
     out->passed = true;
     out->result = MAGB_OK;
     sprintf(out->detail[1], "SENT OK");
+}
+
+/* Caps how many messages this scans/DELEs per run -- the mailbox is a
+ * shared test account (not something this ROM owns exclusively), and a
+ * bounded loop keeps a single test run's POP3 traffic (and its worst-
+ * case runtime) predictable regardless of how many unrelated messages
+ * happen to be sitting in it. */
+#define EMAIL_DELETE_MAX_SCAN 20U
+
+/* Removes only the messages this ROM's own test sent -- identified by
+ * TOP <n> 0 (headers only, no body) containing exactly this ROM's own
+ * kTestEmailSubjectLine. Never deletes anything else in the mailbox:
+ * if TOP isn't supported by the server (no "+OK"), a message's headers
+ * don't match, or a header line arrives split oddly, that message is
+ * simply left alone rather than guessed at. DELE only *marks* messages
+ * for removal -- POP3 doesn't actually purge them until a clean QUIT,
+ * which the caller still sends afterwards. Returns how many were
+ * marked, for the result screen (the project owner has seen more than
+ * one identical test message accumulate in the same mailbox across
+ * repeated runs, so this can legitimately delete more than one). */
+static uint8_t delete_matching_test_emails(magb_context_t *ctx, uint8_t conn_id,
+                                            char *line, uint8_t line_cap,
+                                            uint16_t msg_count, bool *remote_closed)
+{
+    uint16_t msg;
+    uint16_t scan_count = (msg_count > EMAIL_DELETE_MAX_SCAN) ? EMAIL_DELETE_MAX_SCAN : msg_count;
+    uint8_t deleted = 0U;
+
+    for (msg = 1U; msg <= scan_count; msg++) {
+        bool matched = false;
+        uint8_t header_lines;
+        magb_result_t r;
+
+        sprintf(line, "TOP %u 0\r\n", msg);
+        if (!line_step(ctx, conn_id, line, line, line_cap, "+OK", &r, remote_closed)) {
+            if (*remote_closed || r != MAGB_OK) {
+                break;
+            }
+            continue; /* TOP unsupported/message missing -- skip, never guess */
+        }
+
+        for (header_lines = 0U; header_lines < 40U; header_lines++) {
+            r = tcp_recv_line(ctx, conn_id, line, line_cap, remote_closed);
+            if (r != MAGB_OK || *remote_closed) {
+                break;
+            }
+            if (strcmp(line, ".\r\n") == 0 || strcmp(line, ".\n") == 0) {
+                break; /* end of headers (RFC 1939 multi-line terminator) */
+            }
+            if (strncmp(line, kTestEmailSubjectLine, strlen(kTestEmailSubjectLine)) == 0) {
+                matched = true;
+            }
+        }
+        if (*remote_closed) {
+            break;
+        }
+
+        if (matched) {
+            sprintf(line, "DELE %u\r\n", msg);
+            if (line_step(ctx, conn_id, line, line, line_cap, "+OK", &r, remote_closed)) {
+                deleted++;
+            }
+            if (*remote_closed) {
+                break;
+            }
+        }
+    }
+    return deleted;
 }
 
 void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *password)
@@ -1063,6 +1179,7 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
+    tcp_line_reset();
 
     r = tcp_recv_line(ctx, conn_id, line, sizeof(line), &remote_closed);
     if (r != MAGB_OK || strncmp(line, "+OK", 3) != 0) {
@@ -1091,12 +1208,26 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
         return;
     }
 
-    (void)tcp_send_line(ctx, conn_id, "QUIT\r\n"); /* best-effort */
-    isp_http_cleanup(ctx, conn_id, true, true);
+    {
+        uint16_t msg_count = parse_leading_uint(line + 4);
+        uint8_t deleted = 0U;
 
-    out->passed = true;
-    out->result = MAGB_OK;
-    sprintf(out->detail[1], "MESSAGES: %u", parse_leading_uint(line + 4));
+        if (!remote_closed) {
+            deleted = delete_matching_test_emails(ctx, conn_id, line, sizeof(line),
+                                                   msg_count, &remote_closed);
+        }
+
+        (void)tcp_send_line(ctx, conn_id, "QUIT\r\n"); /* best-effort; commits any DELE marks */
+        isp_http_cleanup(ctx, conn_id, true, true);
+
+        out->passed = true;
+        out->result = MAGB_OK;
+        if (deleted > 0U) {
+            sprintf(out->detail[1], "MSGS %u DEL %u", msg_count, deleted);
+        } else {
+            sprintf(out->detail[1], "MESSAGES: %u", msg_count);
+        }
+    }
 }
 
 /* ---- Test 2d: ISP Raw TCP (interactive "netcat viewer") ---------------

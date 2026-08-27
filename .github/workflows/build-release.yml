@@ -1,0 +1,79 @@
+name: Build and release ROM
+
+# Only ever builds/publishes from main: automatically on every push
+# there, or manually via "Run workflow" (workflow_dispatch) -- also
+# restricted to main by the `if` guard on the release job below, so a
+# manual run against another branch still won't publish anything.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# GBDK_HOME/short SHA are computed once and reused by both steps that
+# need them (build + release), rather than recomputed inline.
+env:
+  GBDK_VERSION: "4.5.0"
+
+jobs:
+  build-and-release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Short commit hash
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache GBDK-2020
+        id: gbdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/gbdk
+          key: gbdk-2020-${{ env.GBDK_VERSION }}-linux64
+
+      - name: Download GBDK-2020
+        if: steps.gbdk-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sL -o /tmp/gbdk.tar.gz \
+            "https://github.com/gbdk-2020/gbdk-2020/releases/download/${GBDK_VERSION}/gbdk-linux64.tar.gz"
+          tar -xzf /tmp/gbdk.tar.gz -C "$HOME"
+
+      # Local `make` shows __TIME__ instead (see src/app/ui.c) -- CI
+      # builds show the 7-char commit hash so a released ROM can always
+      # be traced back to the exact commit it came from, which compile
+      # time alone can't do.
+      - name: Build ROM
+        run: |
+          make GBDK_HOME="$HOME/gbdk" \
+            CFLAGS_EXTRA="-DBUILD_VERSION_STR=${{ steps.vars.outputs.sha_short }}"
+
+      # Per CLAUDE.md's Build Validation section: confirm the ROM is
+      # CGB-only (header byte 0x143 = 0xC0) before publishing it.
+      - name: Validate CGB header
+        run: |
+          byte=$(xxd -s 0x143 -l 1 -p build/mobile_adapter_testsuite.gbc)
+          if [ "$byte" != "c0" ]; then
+            echo "ROM header byte 0x143 = $byte, expected c0 (CGB-only)"
+            exit 1
+          fi
+
+      - name: Run host-side protocol tests
+        run: make test
+
+      # Single rolling release: always the same tag ("latest"), replaced
+      # in full every run, rather than accumulating one tag per commit.
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag --repo "${{ github.repository }}" || true
+          gh release create latest build/mobile_adapter_testsuite.gbc \
+            --repo "${{ github.repository }}" \
+            --title "MAGB TestSuite (${{ steps.vars.outputs.sha_short }})" \
+            --notes "Automatically built from commit ${{ steps.vars.outputs.sha_short }} on main." \
+            --latest
