@@ -64,13 +64,29 @@ ui_menu_item_t ui_main_menu(bool *want_trace)
         uint8_t pressed;
 
         cls();
-        /* __TIME__ is a standard compiler-provided macro (the time
-         * this file was compiled). Shown so it's possible to tell,
-         * just by looking at the running ROM, whether it's actually
-         * the build you just made -- this bit us during hardware/BGB
-         * testing, where a stale ROM/process was easy to mistake for
-         * a fresh one. */
-        printf("MOBILE ADAPTER GB\nTESTSUITE " __TIME__ "\n");
+        /* Identifies exactly which build is running, so a stale ROM/
+         * process can't be mistaken for a fresh one -- this bit us
+         * during hardware/BGB testing. Local builds show __TIME__ (the
+         * compiler-provided compile time, already a quoted string
+         * literal); CI builds override BUILD_VERSION_STR to the 7-char
+         * commit hash instead (see .github/workflows/build-release.yml),
+         * since compile time alone doesn't identify which commit a
+         * CI-built ROM came from. BUILD_VERSION_STR arrives as a bare,
+         * unquoted token (e.g. -DBUILD_VERSION_STR=abc1234), not a
+         * ready-made string -- this GBDK/SDCC lcc strips a quoted -D
+         * value's quotes entirely (confirmed: -DFOO=\"bar\" defines FOO
+         * as the bare token bar, not the string "bar", breaking string
+         * concatenation), so the stringizing operator below builds the
+         * actual string literal in C instead of relying on the shell/
+         * Makefile to pass one through intact. */
+#ifdef BUILD_VERSION_STR
+#define BUILD_VERSION_STRINGIFY_(x) #x
+#define BUILD_VERSION_STRINGIFY(x) BUILD_VERSION_STRINGIFY_(x)
+#define BUILD_VERSION_TEXT BUILD_VERSION_STRINGIFY(BUILD_VERSION_STR)
+#else
+#define BUILD_VERSION_TEXT __TIME__
+#endif
+        printf("MOBILE ADAPTER GB\nTESTSUITE " BUILD_VERSION_TEXT "\n");
         for (i = 0U; i < UI_MENU_COUNT; i++) {
             gotoxy(0U, (uint8_t)(4U + i));
             /* Deliberately two calls, not printf("%c%s\n", ...): GBDK's
@@ -266,17 +282,47 @@ static void print_ascii_field(const uint8_t *bytes, uint8_t len)
  * single-screen version simply didn't fit in 18 rows. */
 static void draw_config_page(const uint8_t config[MAGB_CONFIG_SIZE], uint8_t page)
 {
+    /* Both pre-computed into plain locals, then passed to printf() as
+     * bare variables -- confirmed via isolated GBDK/SDCC tests (real
+     * BGB screenshot showed "769/0"/"770/256" instead of "1/3"/"2/3")
+     * that this printf's %u rendering breaks specifically when handed
+     * an inline cast-of-an-expression argument like
+     * "(uint8_t)(page + 1U)" directly; a plain already-computed
+     * variable works fine. Also deliberately three separate one-
+     * specifier printf() calls, not printf("%u/%u", ...), which
+     * produces the same kind of garbage independent of the above. The
+     * title itself was also one character over the 20-column screen
+     * width ("ADAPTER CONFIG (0x19)" is 21 chars), which combined with
+     * the old single gotoxy(15,0) overwrite to produce the corrupted
+     * first two rows. Dropped "(0x19)" (a command-ID detail with no
+     * space left on the same row) to fit. */
+    uint8_t page_num = (uint8_t)(page + 1U);
+    uint8_t page_count = CONFIG_PAGE_COUNT;
+
     cls();
-    printf("ADAPTER CONFIG (0x19)");
+    printf("ADAPTER CONFIG");
     gotoxy(15U, 0U);
-    printf("%u/%u", (uint8_t)(page + 1U), CONFIG_PAGE_COUNT);
+    printf("%u", page_num);
+    gotoxy(16U, 0U);
+    printf("/");
+    gotoxy(17U, 0U);
+    printf("%u", page_count);
 
     if (page == 0U) {
         uint8_t reg_state = config[MAGB_CONFIG_OFF_REG_STATE];
         gotoxy(0U, 2U);
-        printf("HDR: %hx %hx (%c%c)", (unsigned char)config[MAGB_CONFIG_OFF_MAGIC],
-               (unsigned char)config[MAGB_CONFIG_OFF_MAGIC + 1U],
-               config[MAGB_CONFIG_OFF_MAGIC], config[MAGB_CONFIG_OFF_MAGIC + 1U]);
+        /* Two putchar() calls, not "(%c%c)" in the printf above: this
+         * GBDK/SDCC printf drops the second %c (confirmed via an
+         * isolated test -- "(M )" instead of "(MA)"), the same class of
+         * bug as the %u one described above, just a different
+         * specifier. Matches ui_main_menu()'s existing "%c immediately
+         * followed by %s" workaround for the same underlying class of
+         * printf bug. */
+        printf("HDR: %hx %hx (", (unsigned char)config[MAGB_CONFIG_OFF_MAGIC],
+               (unsigned char)config[MAGB_CONFIG_OFF_MAGIC + 1U]);
+        putchar(config[MAGB_CONFIG_OFF_MAGIC]);
+        putchar(config[MAGB_CONFIG_OFF_MAGIC + 1U]);
+        printf(")");
         gotoxy(0U, 3U);
         printf("REG STATE: %hx ", (unsigned char)reg_state);
         /* Both documented values (0x01 "in progress", 0x81 "complete")
@@ -486,15 +532,14 @@ bool ui_edit_number(char *buf, const char *label)
 }
 
 /* Space first (the "blank slot" sentinel used to pad unused
- * positions), then A-Z, a-z, 0-9. Real account passwords used against
- * this project's REON test deployment (e.g. "pass157") don't need
- * anything outside this set, and it keeps the UP/DOWN cycle short
- * enough to dial in on real hardware without a keyboard. A full 2D
- * on-screen keyboard was also tried here per the project owner's
- * request, but reproducibly hung the ROM at runtime and was reverted;
- * see [[magb-input-hang-gbdk]]. */
+ * positions), then lower-case a-z, upper-case A-Z, then 0-9 -- ordered
+ * this way (lower before upper before digits) per the project owner's
+ * request, since most real account passwords here are lower-case.
+ * A full 2D on-screen keyboard was also tried here per the project
+ * owner's request, but reproducibly hung the ROM at runtime and was
+ * reverted; see [[magb-input-hang-gbdk]]. */
 static const char kTextCharset[] =
-    " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 #define TEXT_CHARSET_LEN ((uint8_t)(sizeof(kTextCharset) - 1U))
 
 static uint8_t text_charset_index(char c)

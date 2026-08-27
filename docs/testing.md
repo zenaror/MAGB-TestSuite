@@ -73,8 +73,8 @@ and 2.
    TCP connection to port 80, and issues a real HTTP/1.0 GET for
    Pokémon Crystal's real "Mystery Egg" metadata file. Whether this
    reaches the real REON server or just a local mock depends entirely
-   on how `libmobile-bgb`/`libmobile` is configured (relay/ISP
-   settings) — this ROM performs no emulator-specific shortcut, it just
+   on how `libmobile` is configured (relay/ISP settings) — this ROM
+   performs no emulator-specific shortcut, it just
    speaks normal MAGB traffic and trusts whatever is on the other end
    of the adapter emulation. A `TRANSPORT PASS` with a non-200 HTTP
    status still proves the full Mobile Adapter → ISP → DNS → TCP →
