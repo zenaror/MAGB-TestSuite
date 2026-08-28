@@ -77,6 +77,26 @@ sozinha). A espera foi aumentada para a mesma ordem de grandeza da
 espera de discagem (bem mais generosa), mantendo o cancelamento pelo
 botão B em todo momento.
 
+Depois, descobrimos que o próprio adaptador só espera ~1 segundo por
+uma ligação recebida (Wait For Call), não importa quanto tempo a ROM
+esteja disposta a esperar — confirmamos isso lendo o código-fonte real
+do `libmobile` e comparando com o disassembly original do Pokémon
+Crystal, que faz exatamente a mesma coisa: ao ver esse erro específico
+do adaptador, simplesmente manda o comando de novo. Passamos a fazer o
+mesmo — tentar de novo em vez de esperar uma vez só por muito tempo.
+
+Por fim, percebemos que quando um lado encerrava a ligação, às vezes o
+outro lado ficava rodando pra sempre sem perceber, e às vezes recebia
+um erro na hora — de forma inconsistente. Rastreamos até o
+`libmobile`: ele já tinha uma correção parcial pra isso (ligação P2P
+não é like internet, é mais parecida com uma chamada de telefone real,
+que não tem como saber na hora que a linha caiu — o jogo tem que
+perceber sozinho, por timeout). Só que essa correção cobria só metade
+dos casos. Completamos a outra metade diretamente no fork do
+`libmobile` usado pelo projeto. Depois de ajustar o PicoAdapterGB (o
+hardware real usado para os testes) com essa correção, os testes de
+P2P passaram a funcionar corretamente de ponta a ponta.
+
 ## E-mail: bytes perdidos numa mesma resposta
 
 Um teste real mostrou o servidor de e-mail respondendo com duas linhas
