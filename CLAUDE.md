@@ -2,6 +2,27 @@
 
 This file provides instructions for Claude Code when working on this repository.
 
+## Repository Layout
+
+This repository holds more than one implementation of the same
+TestSuite, each self-contained in its own top-level directory (see the
+root `README.md`):
+
+* **`gbdk/`** — the current, working implementation (C via
+  GBDK-2020/SDCC). Everything below this point in this document --
+  `Makefile`, `src/`, `include/`, `tests/`, `docs/`, build commands --
+  is relative to `gbdk/`, not the repo root. `cd gbdk` before running
+  `make`/`make test`/etc.
+* `rgbds/` — a planned hand-written SM83 assembly rewrite via RGBDS,
+  not started yet. When it exists, treat it as its own self-contained
+  project with its own build instructions; do not assume anything
+  GBDK-specific below (toolchain, `-msm83:gb`, SDCC quirks) applies to
+  it.
+* `emulador/` and `config.bin` at the repo root are shared across
+  every implementation directory (a local BGB working directory and a
+  real captured Mobile Adapter config file, respectively -- see
+  `gbdk/docs/testing.md`), not duplicated per implementation.
+
 ## Project Overview
 
 This repository contains a **Game Boy Color homebrew TestSuite ROM** written in C using **GBDK-2020**.

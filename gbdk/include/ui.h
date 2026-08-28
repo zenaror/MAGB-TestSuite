@@ -38,10 +38,38 @@ void ui_show_result(const char *title, const test_result_t *result);
 void ui_show_trace(const magb_context_t *ctx);
 void ui_show_config(const uint8_t config[MAGB_CONFIG_SIZE]);
 
-/** In-place digit editor for a 12-digit phone/IP-style number.
+/** Draws a static "TESTING..." screen -- call right before running a
+ * test, so the user sees something changed instead of a frozen-looking
+ * screen while a test's internal waits run. Deliberately takes no
+ * title (the result screen right after already names the test; a
+ * second copy of the same string here would just be a second literal
+ * SDCC doesn't pool, and this ROM has no spare bytes for that).
+ * `cancelable` shows a "B: CANCEL" hint for tests that actually honor
+ * ctx->cancel_check (P2P Caller/Listener only, currently). A test that
+ * draws its own screen (e.g. Raw TCP) should simply never call this.
+ * A live animation was tried here (a tick callback driven from the
+ * protocol layer's own wait loop, mirroring cancel_check) and worked,
+ * but cost ~300 bytes this ROM doesn't have to spare -- reverted in
+ * favor of this static version per the project owner's own fallback
+ * instruction. */
+void ui_show_testing(bool cancelable);
+
+/** In-place digit editor for a phone/IP-style number, up to 12 digits.
  * `buf` must be at least 13 bytes (12 digits + NUL) and NUL-terminated
- * on entry; left unchanged if the user cancels with B. */
-bool ui_edit_number(char *buf, const char *label);
+ * on entry; left unchanged if the user cancels with B.
+ *
+ * `variable_len`: false locks the length at exactly 12 digits (e.g. the
+ * Raw TCP IP editor, whose result is always parsed as a fixed 4-octet
+ * dotted-quad -- see parse_ip12() in test_runner.c). true additionally
+ * lets SELECT/START shrink/grow the active length (down to 1, up to
+ * 12) before confirming, and only that many digits are written to
+ * `buf` on A -- needed for the P2P Caller field, since libmobile's
+ * direct-IP P2P dial requires exactly 12 digits (parsed as an IPv4
+ * address) but a relay-based call (a different mechanism entirely, see
+ * docs/protocol-notes.md) is dialed with a real phone-number-shaped
+ * string, commonly 10 digits, that must reach magb_dial() at its own
+ * length rather than padded out to 12. */
+bool ui_edit_number(char *buf, const char *label, bool variable_len);
 
 /** In-place text editor for a short (<=UI_EDIT_TEXT_MAX_LEN char)
  * string such as an ISP password -- UP/DOWN cycles the character

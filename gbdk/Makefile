@@ -21,10 +21,11 @@ BUILD_DIR := build
 ROM       := $(BUILD_DIR)/mobile_adapter_testsuite.gbc
 
 # Local emulator working directory (e.g. a BGB install), at the
-# project root. Every build copies the freshly built ROM there
-# automatically; not required to exist -- the copy is skipped with a
-# message if missing, it never fails the build.
-EMU_DIR := emulador
+# repo root (../emulador -- shared across implementations, one level
+# up from this gbdk/ directory). Every build copies the freshly built
+# ROM there automatically; not required to exist -- the copy is
+# skipped with a message if missing, it never fails the build.
+EMU_DIR := ../emulador
 
 # ROM name shown in the cartridge header (max 16 chars).
 ROM_NAME  := MAGB TESTSUITE
