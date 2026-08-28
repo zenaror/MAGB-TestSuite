@@ -55,7 +55,7 @@ void main(void)
         switch (sel) {
         case UI_MENU_ADAPTER_SESSION:
             test_adapter_session(&ctx, &result);
-            ui_show_result("ADAPTER / SESSION", &result);
+            ui_show_result("ADAPTER/SESSION", &result);
             break;
 
         case UI_MENU_ISP_HTTP: {
@@ -75,11 +75,25 @@ void main(void)
                 "TRAINER HOME",
                 "EMAIL SEND",
                 "EMAIL RECV",
-                "RAW TCP (NC)"
+                "RAW TCP(NC)"
             };
             #define ISP_SUBMENU_COUNT 7U
-            uint8_t choice = ui_select_submenu("ISP / HTTP", kIspLabels, ISP_SUBMENU_COUNT);
+            uint8_t choice = ui_select_submenu("ISP/HTTP", kIspLabels, ISP_SUBMENU_COUNT);
 
+            /* Shared "TESTING..." for every choice that actually runs a
+             * test_result_t-based test (everything except Raw TCP,
+             * which draws its own screen, and "cancelled") -- one call
+             * site instead of six identical ones. (Reusing kIspLabels[]
+             * for the ui_show_result() titles below, instead of the
+             * literals each case already has, was tried and measurably
+             * cost *more* code than the duplicate strings it removed --
+             * SM83 has no hardware multiply, and SDCC's indexing code
+             * for a `const char *const[]` is not cheap here even
+             * computed once. Plain literals below are the smaller
+             * option in practice, not just in theory.) */
+            if (choice < 6U) {
+                ui_show_testing(false);
+            }
             switch (choice) {
             case 0U:
                 test_isp_http(&ctx, &result, isp_password, TEST_HTTP_HOST, TEST_HTTP_PORT, TEST_HTTP_PATH);
@@ -113,7 +127,7 @@ void main(void)
                  * screen throughout, including its own "press A/B"
                  * exit prompt, so no ui_show_result() call follows it
                  * (see its declaration in test_runner.h for why). */
-                if (ui_edit_number(raw_tcp_ip, "RAW TCP IP")) {
+                if (ui_edit_number(raw_tcp_ip, "RAW TCP IP", false)) {
                     test_isp_raw_tcp(&ctx, raw_tcp_ip, TEST_ISP_RAW_PORT);
                 }
                 break;
@@ -128,13 +142,15 @@ void main(void)
             break;
 
         case UI_MENU_P2P_CALLER:
-            if (ui_edit_number(p2p_number, "P2P NUMBER (OR IP)")) {
+            if (ui_edit_number(p2p_number, "P2P NUMBER", true)) {
+                ui_show_testing(true);
                 test_p2p_caller(&ctx, &result, p2p_number);
                 ui_show_result("P2P CALLER", &result);
             }
             break;
 
         case UI_MENU_P2P_LISTENER:
+            ui_show_testing(true);
             test_p2p_listener(&ctx, &result);
             ui_show_result("P2P LISTENER", &result);
             break;

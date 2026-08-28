@@ -24,8 +24,13 @@ magb_result_t magb_telephone_status(magb_context_t *ctx, magb_phone_status_t *ou
 
 /* ---- Dial Telephone (0x12) / Hang Up (0x13) ------------------------ */
 /** `number` is an ASCII digit string (digits, '#', '*'), NUL-terminated,
- * at most 31 characters (kept well under the 254-byte payload cap). */
-magb_result_t magb_dial(magb_context_t *ctx, const char *number);
+ * at most 31 characters (kept well under the 254-byte payload cap).
+ * `timeout_frames` is the caller's choice on purpose: ISP dial-up
+ * resolves quickly, but a P2P dial has to wait out however long the
+ * adapter takes to actually attempt (and possibly fail/time out) a raw
+ * TCP connect to the dialed peer, which can legitimately take much
+ * longer -- see MAGB_TIMEOUT_FRAMES_P2P_CALL in test_runner.c. */
+magb_result_t magb_dial(magb_context_t *ctx, const char *number, uint16_t timeout_frames);
 magb_result_t magb_hangup(magb_context_t *ctx);
 
 /* ---- Wait For Telephone Call (0x14) --------------------------------

@@ -26,7 +26,7 @@ magb_result_t magb_telephone_status(magb_context_t *ctx, magb_phone_status_t *ou
     return MAGB_OK;
 }
 
-magb_result_t magb_dial(magb_context_t *ctx, const char *number)
+magb_result_t magb_dial(magb_context_t *ctx, const char *number, uint16_t timeout_frames)
 {
     uint8_t payload[1U + MAGB_MAX_PHONE_NUMBER_LEN];
     uint8_t len;
@@ -48,7 +48,7 @@ magb_result_t magb_dial(magb_context_t *ctx, const char *number)
     memcpy(&payload[1], number, len);
 
     r = magb_execute(ctx, MAGB_CMD_DIAL, payload, (uint8_t)(1U + len), &response,
-                      MAGB_TIMEOUT_FRAMES_LONG);
+                      timeout_frames);
     if (r != MAGB_OK) {
         return r;
     }

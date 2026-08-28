@@ -141,10 +141,20 @@
 /* 12-digit IP-style phone number: libmobile's own mobile_parse_phoneaddr()
  * (util.c) parses any 12-digit MAGB_CMD_DIAL payload as 4 groups of 3
  * decimal digits -> an IPv4 address, independent of libmobile-bgb.
- * "127000000001" -> 127.0.0.1 (loopback: two TestSuite ROMs talking
- * to the same local libmobile-bgb instance). Override for a REON
- * relay-assigned number or another host's IP. This can also be
- * changed at runtime from the P2P Caller menu (digit-entry screen). */
+ * "127000000001" -> 127.0.0.1 (loopback: two TestSuite ROMs talking to
+ * the same local libmobile-bgb instance). Override with another host's
+ * IP in this same 12-digit form for a two-machine test -- the adapter
+ * then opens a direct outbound TCP connection to <that IP>:p2p_port
+ * (default 1027, MOBILE_DEFAULT_P2P_PORT), so that port needs to be
+ * mutually reachable between the two machines. This value only means
+ * anything on that direct-IP path: a real REON relay-assigned number
+ * is not usable here at all -- relay mode is a separate mechanism,
+ * enabled on the `mobile` process itself (`--relay <addr>`, not this
+ * ROM), and once active the dialed number goes to the relay server's
+ * own call-matching protocol instead of ever being parsed as an IP
+ * (see references/libmobile/commands.c: command_tel() branches on
+ * adapter->config.relay.type before this parsing is ever reached).
+ * Editable at runtime from the P2P Caller menu (digit-entry screen). */
 #define TEST_P2P_PHONE        "127000000001"
 
 /* "RAW TCP" test target -- mirrors gba-link-connection's own

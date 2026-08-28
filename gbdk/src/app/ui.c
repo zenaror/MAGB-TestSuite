@@ -9,13 +9,17 @@
 #include <string.h>
 
 static const char *const kMenuLabels[UI_MENU_COUNT] = {
-    "ADAPTER / SESSION",
+    "ADAPTER/SESSION",
     "READ CONFIG",
     "ISP PASSWORD",
-    "ISP / HTTP",
+    "ISP/HTTP",
     "P2P CALLER",
     "P2P LISTENER"
 };
+
+/* Shared across ui_show_result()/ui_show_trace()/ui_show_config() --
+ * SDCC doesn't pool identical literals and this ROM has no mapper. */
+static const char kBackHint[] = "A/B: MENU";
 
 void ui_init(void)
 {
@@ -98,7 +102,7 @@ ui_menu_item_t ui_main_menu(bool *want_trace)
             printf("%s\n", kMenuLabels[i]);
         }
         gotoxy(0U, 16U);
-        printf("A:RUN SELECT:TRACE");
+        printf("A:RUN SEL:TRACE");
 
         pressed = wait_key_edge();
         if (pressed & J_UP) {
@@ -160,27 +164,36 @@ const char *ui_result_str(magb_result_t r)
     switch (r) {
     case MAGB_OK:                     return "OK";
     case MAGB_ERR_TIMEOUT:            return "TIMEOUT";
-    case MAGB_ERR_NOT_CGB:            return "NOT A CGB";
-    case MAGB_ERR_ADAPTER_NOT_FOUND:  return "ADAPTER NOT FOUND";
+    case MAGB_ERR_NOT_CGB:            return "NOT CGB";
+    case MAGB_ERR_ADAPTER_NOT_FOUND:  return "NO ADAPTER";
     case MAGB_ERR_BAD_MAGIC:          return "BAD MAGIC";
     case MAGB_ERR_BAD_LENGTH:         return "BAD LENGTH";
-    case MAGB_ERR_PAYLOAD_TOO_LARGE:  return "PAYLOAD TOO LARGE";
+    case MAGB_ERR_PAYLOAD_TOO_LARGE:  return "TOO LARGE";
     case MAGB_ERR_BAD_CHECKSUM:       return "BAD CHECKSUM";
-    case MAGB_ERR_BAD_ACK:            return "BAD ACK";
-    case MAGB_ERR_BAD_DEVICE_ID:      return "BAD DEVICE ID";
+    case MAGB_ERR_BAD_ACK:            return "NO ACK";
+    case MAGB_ERR_BAD_DEVICE_ID:      return "BAD DEV ID";
     case MAGB_ERR_UNEXPECTED_COMMAND: return "UNEXPECTED CMD";
-    case MAGB_ERR_REMOTE_UNSUPPORTED: return "REMOTE: UNSUPPORTED";
-    case MAGB_ERR_REMOTE_CHECKSUM:    return "REMOTE: CHECKSUM";
-    case MAGB_ERR_REMOTE_INTERNAL:    return "REMOTE: INTERNAL";
-    case MAGB_ERR_REMOTE_STATUS:      return "ADAPTER ERROR STATUS";
-    case MAGB_ERR_SESSION:            return "SESSION ERROR";
-    case MAGB_ERR_PHONE:              return "PHONE ERROR";
-    case MAGB_ERR_ISP:                return "ISP ERROR";
-    case MAGB_ERR_DNS:                return "DNS ERROR";
-    case MAGB_ERR_TCP:                return "TCP ERROR";
-    case MAGB_ERR_P2P:                return "P2P ERROR";
+    case MAGB_ERR_REMOTE_UNSUPPORTED: return "REM:UNSUPPORTED";
+    case MAGB_ERR_REMOTE_CHECKSUM:    return "REM:CHECKSUM";
+    case MAGB_ERR_REMOTE_INTERNAL:    return "REM:INTERNAL";
+    case MAGB_ERR_REMOTE_STATUS:      return "ERROR STATUS";
+    case MAGB_ERR_SESSION:            return "SESSION ERR";
+    case MAGB_ERR_PHONE:              return "PHONE ERR";
+    case MAGB_ERR_ISP:                return "ISP ERR";
+    case MAGB_ERR_DNS:                return "DNS ERR";
+    case MAGB_ERR_TCP:                return "TCP ERR";
+    case MAGB_ERR_P2P:                return "P2P ERR";
     case MAGB_ERR_CANCELLED:          return "CANCELLED";
-    default:                          return "UNKNOWN ERROR";
+    default:                          return "UNKNOWN ERR";
+    }
+}
+
+void ui_show_testing(bool cancelable)
+{
+    cls();
+    printf("TESTING\n");
+    if (cancelable) {
+        printf("B:CANCEL");
     }
 }
 
@@ -194,7 +207,7 @@ void ui_show_result(const char *title, const test_result_t *result)
 
     cls();
     printf("%s\n\n", title);
-    printf("RESULT: %s\n\n", result->passed ? "PASS" : "FAIL");
+    printf("RESULT:%s\n\n", result->passed ? "PASS" : "FAIL");
     if (result->detail[0][0] != '\0') {
         printf("%s\n", result->detail[0]);
     }
@@ -204,13 +217,13 @@ void ui_show_result(const char *title, const test_result_t *result)
     if (result->official_code[0] != '\0') {
         /* The official Nintendo Mobile Adapter error code for this
          * situation, e.g. "24-000" -- see docs/protocol-notes.md. */
-        printf("CODE: %s\n", result->official_code);
+        printf("CODE:%s\n", result->official_code);
     }
     if (!result->passed) {
         printf("\n%s\n", ui_result_str(result->result));
     }
     gotoxy(0U, 16U);
-    printf("A/B: MENU");
+    printf(kBackHint);
     (void)ui_prompt_continue();
 }
 
@@ -246,7 +259,7 @@ void ui_show_trace(const magb_context_t *ctx)
     }
 
     gotoxy(0U, 16U);
-    printf("A/B: MENU");
+    printf(kBackHint);
     (void)ui_prompt_continue();
 }
 
@@ -319,13 +332,13 @@ static void draw_config_page(const uint8_t config[MAGB_CONFIG_SIZE], uint8_t pag
          * specifier. Matches ui_main_menu()'s existing "%c immediately
          * followed by %s" workaround for the same underlying class of
          * printf bug. */
-        printf("HDR: %hx %hx (", (unsigned char)config[MAGB_CONFIG_OFF_MAGIC],
+        printf("HDR:%hx %hx(", (unsigned char)config[MAGB_CONFIG_OFF_MAGIC],
                (unsigned char)config[MAGB_CONFIG_OFF_MAGIC + 1U]);
         putchar(config[MAGB_CONFIG_OFF_MAGIC]);
         putchar(config[MAGB_CONFIG_OFF_MAGIC + 1U]);
         printf(")");
         gotoxy(0U, 3U);
-        printf("REG STATE: %hx ", (unsigned char)reg_state);
+        printf("REG STATE:%hx ", (unsigned char)reg_state);
         /* Both documented values (0x01 "in progress", 0x81 "complete")
          * have bit 0 set -- bit 7 is what actually distinguishes them
          * (Dan Docs' "Configuration Data" section; confirmed against a
@@ -346,7 +359,7 @@ static void draw_config_page(const uint8_t config[MAGB_CONFIG_SIZE], uint8_t pag
         gotoxy(0U, 8U);
         print_ascii_field(&config[MAGB_CONFIG_OFF_LOGIN_ID], MAGB_CONFIG_LOGIN_ID_LEN);
         gotoxy(0U, 10U);
-        printf("CHECKSUM: %s", magb_config_checksum_ok(config) ? "OK" : "BAD");
+        printf("CHECKSUM:%s", magb_config_checksum_ok(config) ? "OK" : "BAD");
     } else if (page == 1U) {
         gotoxy(0U, 2U);
         printf("EMAIL:");
@@ -386,9 +399,9 @@ static void draw_config_page(const uint8_t config[MAGB_CONFIG_SIZE], uint8_t pag
     }
 
     gotoxy(0U, 16U);
-    printf("LEFT/RIGHT: PAGE");
+    printf("L/R:PAGE");
     gotoxy(0U, 17U);
-    printf("A/B: MENU");
+    printf(kBackHint);
 }
 
 void ui_show_config(const uint8_t config[MAGB_CONFIG_SIZE])
@@ -486,10 +499,19 @@ static uint8_t wait_key_repeat(void)
     }
 }
 
-bool ui_edit_number(char *buf, const char *label)
+/* Shared between ui_edit_number() and ui_edit_text() -- their hint
+ * lines are identical apart from one word ("DIGIT"/"CHAR"). SDCC
+ * doesn't pool identical string literals across call sites, and this
+ * ROM has no mapper (32 KiB, see the Makefile's LCCFLAGS comment), so
+ * one shared format string is worth real bytes. */
+static const char kEditHint[] =
+    "L/R:MOVE\nU/D:%s\nA:OK B:BACK";
+
+bool ui_edit_number(char *buf, const char *label, bool variable_len)
 {
     char work[13];
     uint8_t cursor = 0U;
+    uint8_t len;
     uint8_t i;
     uint8_t existing_len = (uint8_t)strlen(buf);
 
@@ -498,6 +520,16 @@ bool ui_edit_number(char *buf, const char *label)
     }
     work[12] = '\0';
 
+    /* Fixed mode always starts (and stays) at 12 digits, matching the
+     * old hardcoded behavior exactly (parse_ip12() requires exactly 12).
+     * Variable mode starts at whatever length the existing value has,
+     * so re-opening the editor doesn't silently pad a shorter number
+     * back out to 12. */
+    len = 12U;
+    if (variable_len && existing_len >= 1U && existing_len <= 12U) {
+        len = existing_len;
+    }
+
     wait_key_repeat_reset();
     for (;;) {
         uint8_t pressed;
@@ -505,26 +537,45 @@ bool ui_edit_number(char *buf, const char *label)
         cls();
         printf("%s\n\n", label);
         gotoxy(0U, 3U);
-        printf("%s\n", work);
+        {
+            char saved = work[len];
+            work[len] = '\0';
+            printf("%s\n", work);
+            work[len] = saved;
+        }
         gotoxy(cursor, 4U);
         printf("^");
         gotoxy(0U, 7U);
-        printf("LEFT/RIGHT: MOVE\nUP/DOWN: DIGIT\nA: CONFIRM\nB: CANCEL\n(HOLD: FASTER)");
+        printf(kEditHint, "DIGIT");
 
         pressed = wait_key_repeat();
         if (pressed != 0U) {
             sound_select();
         }
         if (pressed & J_LEFT) {
-            cursor = (cursor == 0U) ? 11U : (uint8_t)(cursor - 1U);
+            /* Variable mode: LEFT past the first digit shrinks the
+             * number instead of wrapping, so a shorter (e.g. 10-digit
+             * relay-style) number can be dialed without always sending
+             * 12 digits -- see ui_edit_number()'s doc comment. */
+            if (variable_len && cursor == 0U && len > 1U) {
+                len--;
+            } else {
+                cursor = (cursor == 0U) ? (uint8_t)(len - 1U) : (uint8_t)(cursor - 1U);
+            }
         } else if (pressed & J_RIGHT) {
-            cursor = (uint8_t)((cursor + 1U) % 12U);
+            if (variable_len && cursor == (uint8_t)(len - 1U) && len < 12U) {
+                len++;
+                cursor = (uint8_t)(len - 1U);
+            } else {
+                cursor = (uint8_t)((cursor + 1U) % len);
+            }
         } else if (pressed & J_UP) {
             work[cursor] = (char)('0' + (uint8_t)((work[cursor] - '0' + 1) % 10));
         } else if (pressed & J_DOWN) {
             work[cursor] = (char)('0' + (uint8_t)((work[cursor] - '0' + 9) % 10));
         } else if (pressed & J_A) {
-            strcpy(buf, work);
+            memcpy(buf, work, len);
+            buf[len] = '\0';
             return true;
         } else if (pressed & J_B) {
             return false;
@@ -582,7 +633,7 @@ bool ui_edit_text(char *buf, uint8_t buf_cap, const char *label)
         gotoxy(cursor, 4U);
         printf("^");
         gotoxy(0U, 7U);
-        printf("LEFT/RIGHT: MOVE\nUP/DOWN: CHAR\nA: CONFIRM\nB: CANCEL\n(HOLD: FASTER)");
+        printf(kEditHint, "CHAR");
 
         pressed = wait_key_repeat();
         if (pressed != 0U) {
