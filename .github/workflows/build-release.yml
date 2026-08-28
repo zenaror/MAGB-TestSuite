@@ -21,6 +21,13 @@ jobs:
   build-and-release:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # The GBDK implementation lives in gbdk/ (a sibling rgbds/ directory
+    # is planned for a future assembly rewrite) -- every `run:` step
+    # below executes from there so the existing Makefile-relative paths
+    # (src/, include/, build/, ...) keep working unchanged.
+    defaults:
+      run:
+        working-directory: gbdk
     steps:
       - name: Checkout
         uses: actions/checkout@v4

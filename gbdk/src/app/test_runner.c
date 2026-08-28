@@ -28,6 +28,22 @@ static const char kMsgIspLoginFailed[]     = "ISP LOGIN FAILED";
 static const char kMsgDnsQueryFailed[]     = "DNS QUERY FAILED";
 static const char kMsgTcpOpenFailed[]      = "TCP OPEN FAILED";
 static const char kMsgPhoneStatusFailed[]  = "PHONE STATUS FAILED";
+static const char kMsgEchoSendFailed[]     = "ECHO SEND FAILED";
+static const char kMsgHelloWorldOk[]       = "HELLO WORLD OK";
+static const char kMsgNoCall[]             = "NO CALL";
+static const char kMsgBadTestFrame[]       = "BAD TEST FRAME";
+static const char kHelloWorld[]            = "HELLO WORLD";
+
+/* Official Nintendo Mobile Adapter error codes (docs/protocol-notes.md)
+ * repeated across the many ISP/HTTP/DNS/POP3 test variants -- same
+ * dedup rationale as the kMsg* block above. */
+static const char kCode15000[] = "15-000";
+static const char kCode20000[] = "20-000";
+static const char kCode24000[] = "24-000";
+static const char kCode25000[] = "25-000";
+static const char kCode31002[] = "31-002";
+static const char kCode32000[] = "32-000";
+static const char kCode32401[] = "32-401";
 
 /* Shared between test_isp_email_send() (which writes this exact header
  * line into the test message) and delete_matching_test_emails() (which
@@ -334,23 +350,23 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
         return;
     }
 
-    r = magb_dial(ctx, id.phone);
+    r = magb_dial(ctx, id.phone, MAGB_TIMEOUT_FRAMES_LONG);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgDialIspFailed, "20-000");
+        result_fail_code(out, r, kMsgDialIspFailed, kCode20000);
         (void)magb_end_session(ctx);
         return;
     }
 
     r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgIspLoginFailed, "25-000");
+        result_fail_code(out, r, kMsgIspLoginFailed, kCode25000);
         isp_http_cleanup(ctx, 0U, false, false);
         return;
     }
 
     r = magb_dns_query(ctx, host, host_ip);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgDnsQueryFailed, "15-000");
+        result_fail_code(out, r, kMsgDnsQueryFailed, kCode15000);
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
@@ -359,7 +375,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
 
     r = magb_tcp_open(ctx, host_ip, port, &conn_id);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgTcpOpenFailed, "24-000");
+        result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000);
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
@@ -379,7 +395,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
                             &s_http_resp[resp_len], (uint8_t)HTTP_RESP_BUF_SIZE,
                             &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "HTTP SEND FAILED", "32-000");
+        result_fail_code(out, r, "HTTP SEND FAILED", kCode32000);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
@@ -394,7 +410,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
                                 &s_http_resp[resp_len], cap,
                                 &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
         if (r != MAGB_OK) {
-            result_fail_code(out, r, "HTTP RECV FAILED", "32-000");
+            result_fail_code(out, r, "HTTP RECV FAILED", kCode32000);
             isp_http_cleanup(ctx, conn_id, true, true);
             return;
         }
@@ -430,7 +446,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
             sprintf(out->official_code, "32-%s", status);
         } else {
             sprintf(out->detail[0], "HTTP/ (SHORT)");
-            strcpy(out->official_code, "32-000");
+            strcpy(out->official_code, kCode32000);
         }
         sprintf(out->detail[1], "RX TOTAL %u B", total_received);
     } else {
@@ -438,7 +454,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
         out->result = MAGB_OK; /* transport worked; this is an application-layer mismatch */
         sprintf(out->detail[0], "TRANSPORT OK");
         sprintf(out->detail[1], "NO HTTP/ PREFIX");
-        strcpy(out->official_code, "15-000");
+        strcpy(out->official_code, kCode15000);
     }
 }
 
@@ -682,20 +698,20 @@ void test_isp_http_gb00(magb_context_t *ctx, test_result_t *out, const char *pas
     r = magb_telephone_status(ctx, &phone);
     if (r != MAGB_OK) { result_fail(out, r, kMsgPhoneStatusFailed); (void)magb_end_session(ctx); return; }
 
-    r = magb_dial(ctx, id.phone);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, "20-000"); (void)magb_end_session(ctx); return; }
+    r = magb_dial(ctx, id.phone, MAGB_TIMEOUT_FRAMES_LONG);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, kCode20000); (void)magb_end_session(ctx); return; }
 
     r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, "25-000"); isp_http_cleanup(ctx, 0U, false, false); return; }
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, kCode25000); isp_http_cleanup(ctx, 0U, false, false); return; }
 
     /* Every hostname this test touches gets its own DNS Query (0x28)
      * first -- there is exactly one here (`host`), queried once. */
     r = magb_dns_query(ctx, host, host_ip);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, "15-000"); isp_http_cleanup(ctx, 0U, false, true); return; }
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, kCode15000); isp_http_cleanup(ctx, 0U, false, true); return; }
 
     r = gb00_fetch(ctx, host_ip, port, host, path, id.login, password, status, &resp_len, &did_auth, &fail_stage);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, fail_stage, "32-401");
+        result_fail_code(out, r, fail_stage, kCode32401);
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
@@ -749,16 +765,16 @@ void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *
     r = magb_telephone_status(ctx, &phone);
     if (r != MAGB_OK) { result_fail(out, r, kMsgPhoneStatusFailed); (void)magb_end_session(ctx); return; }
 
-    r = magb_dial(ctx, id.phone);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, "20-000"); (void)magb_end_session(ctx); return; }
+    r = magb_dial(ctx, id.phone, MAGB_TIMEOUT_FRAMES_LONG);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, kCode20000); (void)magb_end_session(ctx); return; }
 
     r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, "25-000"); isp_http_cleanup(ctx, 0U, false, false); return; }
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, kCode25000); isp_http_cleanup(ctx, 0U, false, false); return; }
 
     /* One DNS Query (0x28) for TEST_HTTP_HOST -- shared by both fetches
      * below, since both paths live on the same host. */
     r = magb_dns_query(ctx, TEST_HTTP_HOST, host_ip);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, "15-000"); isp_http_cleanup(ctx, 0U, false, true); return; }
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, kCode15000); isp_http_cleanup(ctx, 0U, false, true); return; }
 
     r = gb00_fetch(ctx, host_ip, TEST_HTTP_PORT, TEST_HTTP_HOST, TEST_HTTP_NEWS_CONFIG_PATH,
                     id.login, password, cfg_status, &resp_len, &did_auth, &fail_stage);
@@ -767,7 +783,7 @@ void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *
          * fills most of detail[0]'s 20-char budget on its own -- no
          * room for a "CONFIG: "/"ARTICLE: " prefix there. detail[1]
          * (normally "LOGIN <id>") carries which stage failed instead. */
-        result_fail_code(out, r, fail_stage, "32-401");
+        result_fail_code(out, r, fail_stage, kCode32401);
         strcpy(out->detail[1], "STAGE: CONFIG");
         isp_http_cleanup(ctx, 0U, false, true);
         return;
@@ -777,7 +793,7 @@ void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *
     r = gb00_fetch(ctx, host_ip, TEST_HTTP_PORT, TEST_HTTP_HOST, TEST_HTTP_NEWS_PATH,
                     id.login, password, art_status, &resp_len, &did_auth, &fail_stage);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, fail_stage, "32-401");
+        result_fail_code(out, r, fail_stage, kCode32401);
         strcpy(out->detail[1], "STAGE: ARTICLE");
         isp_http_cleanup(ctx, 0U, false, true);
         return;
@@ -967,30 +983,30 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
     }
     strncpy(out->detail[0], id.email, sizeof(out->detail[0]) - 1U);
 
-    r = magb_dial(ctx, id.phone);
+    r = magb_dial(ctx, id.phone, MAGB_TIMEOUT_FRAMES_LONG);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgDialIspFailed, "20-000");
+        result_fail_code(out, r, kMsgDialIspFailed, kCode20000);
         (void)magb_end_session(ctx);
         return;
     }
 
     r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgIspLoginFailed, "25-000");
+        result_fail_code(out, r, kMsgIspLoginFailed, kCode25000);
         isp_http_cleanup(ctx, 0U, false, false);
         return;
     }
 
     r = magb_dns_query(ctx, id.smtp, host_ip);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgDnsQueryFailed, "15-000");
+        result_fail_code(out, r, kMsgDnsQueryFailed, kCode15000);
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
 
     r = magb_tcp_open(ctx, host_ip, 25U, &conn_id);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgTcpOpenFailed, "24-000");
+        result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000);
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
@@ -1152,30 +1168,30 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
     }
     strncpy(out->detail[0], id.email, sizeof(out->detail[0]) - 1U);
 
-    r = magb_dial(ctx, id.phone);
+    r = magb_dial(ctx, id.phone, MAGB_TIMEOUT_FRAMES_LONG);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgDialIspFailed, "20-000");
+        result_fail_code(out, r, kMsgDialIspFailed, kCode20000);
         (void)magb_end_session(ctx);
         return;
     }
 
     r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgIspLoginFailed, "25-000");
+        result_fail_code(out, r, kMsgIspLoginFailed, kCode25000);
         isp_http_cleanup(ctx, 0U, false, false);
         return;
     }
 
     r = magb_dns_query(ctx, id.pop, host_ip);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgDnsQueryFailed, "15-000");
+        result_fail_code(out, r, kMsgDnsQueryFailed, kCode15000);
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
 
     r = magb_tcp_open(ctx, host_ip, 110U, &conn_id);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, kMsgTcpOpenFailed, "24-000");
+        result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000);
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
@@ -1183,27 +1199,27 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
 
     r = tcp_recv_line(ctx, conn_id, line, sizeof(line), &remote_closed);
     if (r != MAGB_OK || strncmp(line, "+OK", 3) != 0) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "NO POP3 GREETING", "31-002");
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "NO POP3 GREETING", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     sprintf(line, "USER %s\r\n", user);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "+OK", &r, &remote_closed)) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "USER REJECTED", "31-002");
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "USER REJECTED", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     sprintf(line, "PASS %s\r\n", password);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "+OK", &r, &remote_closed)) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "LOGIN FAILED", "31-002");
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "LOGIN FAILED", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     if (!line_step(ctx, conn_id, "STAT\r\n", line, sizeof(line), "+OK", &r, &remote_closed)) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "STAT FAILED", "31-002");
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "STAT FAILED", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
@@ -1300,7 +1316,7 @@ void test_isp_raw_tcp(magb_context_t *ctx, const char *ip_digits, uint16_t port)
     r = read_isp_identity(ctx, &id);
     if (r != MAGB_OK) { printf("READ CONFIG FAILED\n"); (void)magb_end_session(ctx); goto done_no_cleanup; }
 
-    r = magb_dial(ctx, id.phone);
+    r = magb_dial(ctx, id.phone, MAGB_TIMEOUT_FRAMES_LONG);
     if (r != MAGB_OK) { printf("DIAL ISP FAILED\n"); (void)magb_end_session(ctx); goto done_no_cleanup; }
 
     r = magb_isp_login(ctx, id.login, "", dns1, dns2, &isp);
@@ -1388,22 +1404,85 @@ static magb_result_t p2p_send_frame(magb_context_t *ctx, uint8_t sequence,
  * data" grace period in internet (TCP) mode, not for a P2P call --
  * see docs/protocol-notes.md. So each poll here returns almost
  * instantly when nothing is available yet, unlike an HTTP receive.
- * Without a real per-poll delay, P2P_RECV_MAX_POLLS empty polls could
- * exhaust in well under a frame, giving the *other*, separately
- * operated ROM instance no realistic wall-clock time to catch up.
- * One VBlank (~16.7ms) per empty poll times 180 polls bounds the wait
- * at ~3s while still resolving near-instantly once data is flowing. */
-#define P2P_RECV_MAX_POLLS 180U
+ * One VBlank (~16.7ms) per empty poll spaces the polling out so it
+ * doesn't spin the link at full CPU speed.
+ *
+ * This used to give up after a fixed poll count (first 180 -- ~3s --
+ * then a bumped 1800 -- ~30s). A real two-machine BGB test proved even
+ * the bigger bound wrong: the Caller dialed, got 0x92, and sent its
+ * PING immediately; the Listener got 0x94 and started polling for it,
+ * but the two independently operated machines don't reach this point
+ * in lockstep, and giving up here tears down the connection (see
+ * p2p_cleanup() below) out from under whichever side is still waiting
+ * -- which is exactly what showed up as a real adapter Error Status on
+ * the *other* side (command 0x15) instead of a plain timeout;
+ * libmobile-bgb's own debug log confirmed it: "recv: Foi forcado o
+ * cancelamento de uma conexao existente pelo host remoto."
+ *
+ * The 20-30s bound belongs to *connection establishment* only (Dial /
+ * Wait For Call, MAGB_TIMEOUT_FRAMES_P2P_CALL below) -- once the
+ * adapter has actually connected the two peers, there is no reason to
+ * cap how long this side waits for the other to catch up, so this
+ * loop is intentionally unbounded except for the B cancel check every
+ * iteration (magb_transfer_data() itself still bounds each individual
+ * local serial exchange via MAGB_TIMEOUT_FRAMES_SHORT, so a dead local
+ * adapter still surfaces as MAGB_ERR_TIMEOUT, not a permanent hang). */
 
+/* How long the Caller's Dial (0x12) waits, in one single request,
+ * before giving up -- matches Pokemon Crystal's own P2P
+ * call-establishment behavior (roughly 20-30s before dropping), not
+ * MAGB_TIMEOUT_FRAMES_LONG's 15s. A real Dial to an unreachable/
+ * firewalled peer is a raw TCP connect() at the adapter/relay level
+ * (see docs/protocol-notes.md's P2P section), and OS-level connect
+ * timeouts commonly run 20s+ on their own; cutting this TestSuite's
+ * own wait shorter than that just means it reports its own timeout
+ * before the adapter ever gets to report the real failure reason.
+ * Confirmed against references/libmobile/commands.c
+ * (command_tel_ip(): no internal cutoff, just polls
+ * mobile_cb_sock_connect() until it succeeds or truly fails) that a
+ * single long-timeout request is the right shape for Dial specifically
+ * -- see P2P_WAIT_CALL_MAX_ATTEMPTS below for why the Listener's Wait
+ * For Call needs a different (retry-loop) shape instead. */
+#define MAGB_TIMEOUT_FRAMES_P2P_CALL 1500U /* ~25s @ ~60Hz */
+
+/* Unlike Dial, libmobile's own Wait For Call (direct-IP) only waits
+ * ~1 real second internally before giving up with an Error Status,
+ * regardless of the timeout_frames this ROM asks for --
+ * references/libmobile/commands.c's command_wait_call(),
+ * MOBILE_CONNECTION_WAIT case: it latches MOBILE_TIMER_COMMAND once
+ * at the start and, from then on, unconditionally returns
+ * error_packet(packet, 0) once 1000ms have passed, on every single
+ * poll, forever -- it never gets re-latched. This isn't a bug to work
+ * around quietly: it's confirmed as the *intended* protocol shape by
+ * the real Pokemon Crystal disassembly (references/pokecrystal-mobile-eng/
+ * lib/mobile/main.asm, Function1123b6 / .asm_1123c6): when the response
+ * to Wait For Call is command 0xEE (Error Status), the game just
+ * resends the exact same Wait For Call packet again. So this ROM does
+ * the same -- retries Wait For Call itself, once per "no call yet"
+ * Error Status, instead of expecting one call to block for the whole
+ * wait. Each attempt only needs MAGB_TIMEOUT_FRAMES_SHORT (libmobile
+ * answers within ~1s either way); the attempt count is what gives the
+ * same overall ~20-30s connection-establishment budget as Dial's
+ * MAGB_TIMEOUT_FRAMES_P2P_CALL. B still cancels immediately via
+ * magb_wait_for_call()'s own cancel_check on every attempt. */
+#define P2P_WAIT_CALL_MAX_ATTEMPTS 20U
+
+/* No separate "press B" reminder is printed partway through this wait:
+ * ui_show_testing(true) already put "B:CANCEL" on screen before this
+ * test started, and it stays there for the whole (now unbounded) wait
+ * below -- a second, timed reprint of the same instruction would only
+ * cost ROM bytes this already-full-32KiB build doesn't have to spare
+ * (see the Makefile's -autobank comment) without telling the user
+ * anything "TESTING\nB:CANCEL" hasn't already said since before the
+ * connection was even made. */
 static magb_result_t p2p_recv_frame(magb_context_t *ctx, uint8_t *sequence,
                                      uint8_t *payload, uint8_t *payload_len)
 {
     uint8_t buf[MATS_HEADER_LEN + MATS_MAX_PAYLOAD];
     uint8_t got_len;
     bool remote_closed;
-    uint8_t poll;
 
-    for (poll = 0U; poll < P2P_RECV_MAX_POLLS; poll++) {
+    for (;;) {
         magb_result_t r;
 
         if (ctx->cancel_check != NULL && ctx->cancel_check()) {
@@ -1427,7 +1506,6 @@ static magb_result_t p2p_recv_frame(magb_context_t *ctx, uint8_t *sequence,
         }
         vsync();
     }
-    return MAGB_ERR_TIMEOUT;
 }
 
 static void p2p_cleanup(magb_context_t *ctx)
@@ -1467,9 +1545,9 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
 
-    r = magb_dial(ctx, number);
+    r = magb_dial(ctx, number, MAGB_TIMEOUT_FRAMES_P2P_CALL);
     if (r != MAGB_OK) {
-        result_fail(out, r, "NO CALL");
+        result_fail(out, r, kMsgNoCall);
         (void)magb_end_session(ctx);
         return;
     }
@@ -1480,7 +1558,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
     if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
     if (recv_len != 4U || memcmp(recv_payload, "PONG", 4U) != 0 || recv_seq != 1U) {
-        result_fail(out, MAGB_ERR_P2P, "BAD TEST FRAME");
+        result_fail(out, MAGB_ERR_P2P, kMsgBadTestFrame);
         p2p_cleanup(ctx);
         return;
     }
@@ -1503,12 +1581,12 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
      * can show an actual human-readable message that made it across
      * the link and back, as a plain, at-a-glance "yes, this really
      * worked" on top of the raw byte counts. */
-    r = p2p_send_frame(ctx, 3U, (const uint8_t *)"HELLO WORLD", 11U);
+    r = p2p_send_frame(ctx, 3U, (const uint8_t *)kHelloWorld, 11U);
     if (r != MAGB_OK) { result_fail(out, r, "HELLO SEND FAILED"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
     if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
-    if (recv_len != 11U || memcmp(recv_payload, "HELLO WORLD", 11U) != 0 || recv_seq != 3U) {
+    if (recv_len != 11U || memcmp(recv_payload, kHelloWorld, 11U) != 0 || recv_seq != 3U) {
         result_fail(out, MAGB_ERR_P2P, "BAD HELLO ECHO");
         p2p_cleanup(ctx);
         return;
@@ -1521,7 +1599,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     out->tx_bytes = (uint16_t)(4U + sizeof(pattern) + 11U);
     out->rx_bytes = (uint16_t)(4U + sizeof(pattern) + 11U);
     sprintf(out->detail[0], "TX %u RX %u", out->tx_bytes, out->rx_bytes);
-    sprintf(out->detail[1], "HELLO WORLD OK");
+    sprintf(out->detail[1], kMsgHelloWorldOk);
 }
 
 void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
@@ -1536,14 +1614,26 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
 
-    r = magb_wait_for_call(ctx, MAGB_TIMEOUT_FRAMES_LONG * 4U);
+    /* See P2P_WAIT_CALL_MAX_ATTEMPTS's comment: the adapter itself only
+     * waits ~1s per attempt, so this ROM supplies the retry loop, not
+     * one long blocking request. */
+    {
+        uint8_t attempt;
+        r = MAGB_ERR_TIMEOUT;
+        for (attempt = 0U; attempt < P2P_WAIT_CALL_MAX_ATTEMPTS; attempt++) {
+            r = magb_wait_for_call(ctx, MAGB_TIMEOUT_FRAMES_SHORT);
+            if (r != MAGB_ERR_REMOTE_STATUS) {
+                break;
+            }
+        }
+    }
     if (r == MAGB_ERR_CANCELLED) {
         result_fail(out, r, "CANCELLED");
         (void)magb_end_session(ctx);
         return;
     }
     if (r != MAGB_OK) {
-        result_fail(out, r, "NO CALL");
+        result_fail(out, r, kMsgNoCall);
         (void)magb_end_session(ctx);
         return;
     }
@@ -1551,7 +1641,7 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
     if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
     if (recv_len != 4U || memcmp(recv_payload, "PING", 4U) != 0) {
-        result_fail(out, MAGB_ERR_P2P, "BAD TEST FRAME");
+        result_fail(out, MAGB_ERR_P2P, kMsgBadTestFrame);
         p2p_cleanup(ctx);
         return;
     }
@@ -1563,7 +1653,7 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
 
     r = p2p_send_frame(ctx, recv_seq, recv_payload, recv_len);
-    if (r != MAGB_OK) { result_fail(out, r, "ECHO SEND FAILED"); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { result_fail(out, r, kMsgEchoSendFailed); p2p_cleanup(ctx); return; }
 
     /* Third round-trip: the caller's human-readable "HELLO WORLD"
      * message (see test_p2p_caller()) -- echoed back generically like
@@ -1575,7 +1665,7 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
         if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
 
         r = p2p_send_frame(ctx, recv_seq, recv_payload, hello_len);
-        if (r != MAGB_OK) { result_fail(out, r, "ECHO SEND FAILED"); p2p_cleanup(ctx); return; }
+        if (r != MAGB_OK) { result_fail(out, r, kMsgEchoSendFailed); p2p_cleanup(ctx); return; }
 
         recv_len = (uint8_t)(recv_len + hello_len);
     }
@@ -1587,5 +1677,5 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     out->tx_bytes = (uint16_t)(8U + recv_len);
     out->rx_bytes = (uint16_t)(8U + recv_len);
     sprintf(out->detail[0], "TX %u RX %u", out->tx_bytes, out->rx_bytes);
-    sprintf(out->detail[1], "HELLO WORLD OK");
+    sprintf(out->detail[1], kMsgHelloWorldOk);
 }

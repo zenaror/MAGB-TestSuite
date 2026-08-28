@@ -744,6 +744,47 @@ no battery-backed SRAM). A real MBC with save RAM (e.g.
 MBC5+RAM+BATTERY) would only be needed if the password had to survive
 a power cycle, which was never asked for.
 
+## P2P: direct-IP dialing and relay-based calls are different mechanisms
+
+Confirmed by reading `references/libmobile/commands.c` directly, after
+this ROM's own docs previously (incorrectly) implied a relay-based P2P
+call was just "the same test with a different dialed number":
+
+`command_tel()` (handling `12` Dial Telephone once the number isn't a
+recognized ISP number) branches on `adapter->config.relay.type` *before*
+ever looking at the dialed number as an address:
+
+- **Relay disabled** (`MOBILE_ADDRTYPE_NONE`, the default, and what
+  this TestSuite's P2P Caller/Listener test exercises): a 12-digit dial
+  payload is parsed locally as a raw IPv4 address
+  (`mobile_parse_phoneaddr()`), and the adapter opens a normal outbound
+  TCP connection straight to `<that IP>:p2p_port` (default `1027` --
+  `MOBILE_DEFAULT_P2P_PORT` in `mobile.h`). The Wait For Call (`14`)
+  side opens a TCP *listening* socket on that same port
+  (`command_wait_call_begin()`). This is genuinely peer-to-peer: two
+  `mobile` processes talk directly to each other, and the only shared
+  requirement is that port being mutually reachable (same LAN, no
+  firewall blocking it, for a two-machine setup).
+
+- **Relay enabled** (`mobile` process started with `--relay
+  <server-addr>`, see `references/libmobile-bgb/source/main.c`): the
+  *same* Dial command instead opens a TCP connection to the configured
+  relay **server**, then hands the dialed number to that server's own
+  call-matching protocol (`mobile_relay_proc_call()` in
+  `references/libmobile/relay.c`) -- the number is never parsed as an
+  IP in this mode. Both peers connect to the relay server, which
+  brokers the match; this is a genuine REON-relay-style rendezvous
+  connection, architecturally closer to the ISP/HTTP tests' plain TCP
+  connections than to the direct-IP P2P path above.
+
+These are mutually exclusive, and selected entirely by how the
+`mobile` process itself was launched -- not by anything the Game Boy
+dials. A "REON relay-assigned number" is only meaningful to a specific
+relay server's own accounting and cannot be used as this TestSuite's
+`TEST_P2P_PHONE`/P2P Caller dial value (which is always parsed as a
+12-digit dotted-quad IP). This TestSuite's P2P test only exercises the
+direct-IP path; it does not exercise relay-based calling.
+
 ## Error Status (0x6E) can replace the response to any command
 
 Discovered from a real BGB + libmobile-bgb capture of the P2P test:
