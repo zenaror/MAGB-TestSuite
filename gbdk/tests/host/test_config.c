@@ -1,15 +1,18 @@
 /* Host-side unit tests for the hardware-independent Mobile Adapter GB
  * configuration parser (src/protocol/magb_config.c), validated against
  * a real 512-byte configuration file captured from libmobile-bgb
- * (config.bin at the repo root -- the first 192 bytes of that file are
+ * (config.bin one level up, at the actual repo root -- shared across
+ * every implementation directory, not just this one -- see
+ * README.md/docs/testing.md. The first 192 bytes of that file are
  * byte-for-byte what a real Read Configuration Data (0x19) response
  * would contain; the rest is libmobile-bgb's own on-disk container
  * format, out of scope here).
  *
  * Build/run via:
  *   make test
- * (must be run from the repo root so the relative "config.bin" path
- * resolves; `make test` already does this).
+ * (must be run with this gbdk/ directory as the working directory so
+ * the relative "../config.bin" path resolves; `make test` already does
+ * this).
  */
 #include "magb_config.h"
 
@@ -30,7 +33,7 @@ static void check(bool cond, const char *what)
 
 static bool load_fixture(uint8_t out[MAGB_CONFIG_SIZE])
 {
-    FILE *f = fopen("config.bin", "rb");
+    FILE *f = fopen("../config.bin", "rb");
     size_t n;
     if (f == NULL) {
         return false;
