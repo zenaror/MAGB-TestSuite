@@ -643,6 +643,53 @@ flow.
 
 ## Hard-won bugs (worth reading before touching this code again)
 
+- **Lowercase 'm' rendered as three disconnected vertical strokes.**
+  Reported (2026-08-30) via a real screenshot of the ISP PASSWORD
+  editor: typing "mae" showed an unrecognizable glyph (looked like
+  three bars, or a stray Cyrillic-ish shape) followed by "ae". The
+  original lowercase 'm' used the exact same row pattern (`$A8`, i.e.
+  three isolated 1px legs at columns 0/2/4) for *every* row of its
+  x-height, including the top one -- with nothing connecting the three
+  legs into a recognizable "wide letter with a closed top" shape the
+  way 'm' needs (compare 'n', which reads fine specifically because its
+  top row *does* connect its two legs: `$E0` = a solid arch across the
+  first two legs, only the bottom rows are isolated). Fixed by giving
+  'm' the same treatment -- a solid connecting bar (`$F8`, spanning all
+  three legs) on its own top row, legs (`$A8`) below it. Verified via
+  PyBoy (rendered "mae" through the actual font tiles and read the
+  pixels back) -- not yet re-confirmed on a real screen.
+- **A-Z/0-9 were almost illegible -- and the bitmap data itself showed
+  why.** Reported (2026-08-30) after extended real-hardware use across
+  every ISP/HTTP target. The original set was an algorithmically
+  thresholded downscale of a system typeface, using only 5 columns x 6
+  rows of actual ink inside each 8x8 cell -- and inspecting the raw
+  bitmap bytes turned up real, asymmetric defects consistent with that
+  report, not just a matter of taste: `'O'`'s two side-strokes sat at
+  different columns on different rows (not a symmetric curve at all),
+  for one. Before touching the bitmap data, the project owner also
+  asked whether `gbdk/references/pokecrystal-mobile-eng`'s `font.png`
+  could be used as a basis -- refused: that file is the font extracted
+  from the real Pokemon Crystal ROM (the reference repo's own README
+  says so), with no license, which is exactly the "copyrighted
+  graphics" the repo-root `CLAUDE.md`'s Copyright / Clean-Room
+  Considerations section rules out, "inspired by" or not. Redrawn A-Z
+  and 0-9 from scratch instead -- each glyph hand-designed as its own
+  pixel grid (`rgbds/src/app/text.asm`'s `gen_font.py`-style generation,
+  not traced from any font file), using the full cap-height (rows 0-6,
+  one row taller than the old set) with the baseline on row 6 --
+  deliberately the same row the existing lowercase's x-height baseline
+  already sits on, so a redrawn capital and the existing lowercase
+  letters line up visually without touching the lowercase set at all.
+  `M`/`W` use a 6th column (still one 8px tile each, just less trailing
+  blank space) since they're the widest letters in the set. Verified by
+  rendering the full new A-Z/0-9 set into VRAM via PyBoy and reading
+  each tile's bitmap back out as ASCII art for visual review -- every
+  glyph came back clean and symmetric, matching the intended design
+  exactly (same technique this project already used to verify the
+  original lowercase glyphs when *they* were added). Punctuation,
+  symbols, and lowercase are unchanged. **Confirmed on a real screen**
+  (project owner, 2026-08-30): "MUITO melhor" -- substantially more
+  legible than the old set.
 - **`RawTcpPutChar` wrote to VRAM without turning the LCD off first.**
   Reported (2026-08-30) as some letters (e.g. "O") not showing up
   during a real Raw TCP session. Every other screen in this ROM

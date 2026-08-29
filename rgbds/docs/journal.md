@@ -95,6 +95,27 @@ simplesmente ignorada. O Raw TCP era a única tela que escrevia ao vivo,
 byte por byte, sem essa proteção. Bastou aplicar a mesma proteção que
 já existia em todo o resto do código.
 
+## Letras e números quase ilegíveis -- e por que não usar a fonte do Pokémon
+
+Depois de usar o ROM de verdade por um bom tempo, ficou claro que as
+letras maiúsculas e os números estavam quase ilegíveis. Olhando os
+dados da fonte, dava pra ver o motivo: era uma fonte de sistema
+reduzida por um script até caber num espaço pequeno demais, e algumas
+letras (o "O", por exemplo) ficaram literalmente tortas -- os dois
+traços da lateral não alinhavam entre uma linha e outra.
+
+Antes de redesenhar, veio a pergunta óbvia: dava pra usar a fonte do
+próprio jogo Pokémon Crystal, que está guardada como referência neste
+repositório? A resposta foi não -- aquele arquivo é a fonte extraída de
+dentro da ROM japonesa de verdade, sem licença nenhuma, exatamente o
+tipo de material que este projeto já decidiu nunca incluir (ver a seção
+de direitos autorais do `CLAUDE.md`). Em vez disso, as 26 letras e 10
+números foram desenhados do zero, um por um, usando o espaço inteiro do
+quadrado de 8x8 pixels (antes só usava uma fatia pequena dele) e
+alinhando a "linha de base" das maiúsculas com a mesma linha que as
+minúsculas já usavam, pra tudo continuar combinando visualmente.
+Testado numa tela de verdade depois, ficou bem mais legível.
+
 ## O que falta
 
 Com o Raw TCP confirmado também, só falta o P2P (Caller/Listener) —
