@@ -37,15 +37,24 @@ INCLUDE_DIR := include
 SRCS := \
     src/main.asm \
     src/hw/serial.asm \
+    src/hw/joypad.asm \
     src/protocol/packet.asm \
     src/protocol/session.asm \
-    src/app/text.asm
+    src/protocol/config.asm \
+    src/app/text.asm \
+    src/app/gb00_auth.asm \
+    src/app/net_extra.asm
 
 OBJS := $(patsubst src/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 
-# -H: keep `nop` after `halt` as the deliberate DMG-halt-bug guard it is
-# (src/hw/serial.asm's fatal_not_cgb-equivalent halt loop), not a mistake.
-RGBASMFLAGS := -i $(INCLUDE_DIR)/ -W all -H
+# RGBASM stopped auto-inserting/auto-stripping a `nop` after `halt`
+# entirely as of rgbds v0.8.0 (the old opt-in `-H`/`-h` flags were
+# removed along with the behavior) -- whatever `nop` is literally
+# written in source (e.g. src/hw/serial.asm's fatal_not_cgb-equivalent
+# halt loop, a deliberate DMG-halt-bug guard) is kept as-is, no flag
+# needed. `-i` for `--include` was also removed in that same release;
+# use `-I` instead.
+RGBASMFLAGS := -I $(INCLUDE_DIR)/ -W all
 
 .PHONY: all clean toolchain-check
 
