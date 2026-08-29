@@ -55,7 +55,7 @@ This is the primary target environment and the one to use for Tests 1
 and 2.
 
 1. Build the ROM (`make GBDK_HOME=/path/to/gbdk-2020/gbdk`, see the
-   README for details) — `build/mobile_adapter_testsuite.gbc`.
+   README for details) — `build/mobile_adapter_testsuite_gbdk.gbc`.
 2. Start BGB, load the ROM.
 3. In BGB: right-click → **Link** → **Listen**.
 4. Start `libmobile-bgb`'s `mobile` binary (see its own README for
