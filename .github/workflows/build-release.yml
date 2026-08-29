@@ -12,19 +12,25 @@ on:
 permissions:
   contents: write
 
-# GBDK_HOME/short SHA are computed once and reused by both steps that
-# need them (build + release), rather than recomputed inline.
+# GBDK_VERSION/RGBDS_VERSION/short SHA are computed once and reused by
+# every step that needs them (build + release), rather than recomputed
+# inline.
 env:
   GBDK_VERSION: "4.5.0"
+  RGBDS_VERSION: "0.6.1"
 
 jobs:
   build-and-release:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # The GBDK implementation lives in gbdk/ (a sibling rgbds/ directory
-    # is planned for a future assembly rewrite) -- every `run:` step
-    # below executes from there so the existing Makefile-relative paths
-    # (src/, include/, build/, ...) keep working unchanged.
+    # Two independent, self-contained implementations live side by side
+    # in this repo -- gbdk/ (C via GBDK-2020, the working one) and
+    # rgbds/ (hand-written SM83 assembly via RGBDS, in progress -- see
+    # rgbds/docs/status.md for exactly what's implemented). Both get
+    # built and published every run; a `working-directory:` override on
+    # each rgbds-specific step below switches into it, since the job
+    # default here stays gbdk for backwards compatibility with the
+    # existing GBDK steps' relative paths (src/, include/, build/, ...).
     defaults:
       run:
         working-directory: gbdk
@@ -54,33 +60,73 @@ jobs:
       # builds show the 7-char commit hash so a released ROM can always
       # be traced back to the exact commit it came from, which compile
       # time alone can't do.
-      - name: Build ROM
+      - name: Build GBDK ROM
         run: |
           make GBDK_HOME="$HOME/gbdk" \
             CFLAGS_EXTRA="-DBUILD_VERSION_STR=${{ steps.vars.outputs.sha_short }}"
 
       # Per CLAUDE.md's Build Validation section: confirm the ROM is
       # CGB-only (header byte 0x143 = 0xC0) before publishing it.
-      - name: Validate CGB header
+      - name: Validate GBDK ROM's CGB header
         run: |
-          byte=$(xxd -s 0x143 -l 1 -p build/mobile_adapter_testsuite.gbc)
+          byte=$(xxd -s 0x143 -l 1 -p build/mobile_adapter_testsuite_gbdk.gbc)
           if [ "$byte" != "c0" ]; then
             echo "ROM header byte 0x143 = $byte, expected c0 (CGB-only)"
             exit 1
           fi
 
-      - name: Run host-side protocol tests
+      - name: Run GBDK host-side protocol tests
         run: make test
+
+      # RGBDS ships prebuilt static Linux binaries per release (no
+      # apt/ppa needed) -- rgbasm/rgblink/rgbfix, flat at the tarball
+      # root, matching this project's locally-tested v0.6.1 exactly
+      # (see rgbds/docs/status.md).
+      - name: Cache RGBDS
+        id: rgbds-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/rgbds
+          key: rgbds-${{ env.RGBDS_VERSION }}-linux-x86_64
+
+      - name: Download RGBDS
+        if: steps.rgbds-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$HOME/rgbds"
+          curl -sL -o /tmp/rgbds.tar.xz \
+            "https://github.com/gbdev/rgbds/releases/download/v${RGBDS_VERSION}/rgbds-${RGBDS_VERSION}-linux-x86_64.tar.xz"
+          tar -xJf /tmp/rgbds.tar.xz -C "$HOME/rgbds"
+
+      - name: Build RGBDS ROM
+        working-directory: rgbds
+        run: |
+          make RGBASM="$HOME/rgbds/rgbasm" RGBLINK="$HOME/rgbds/rgblink" RGBFIX="$HOME/rgbds/rgbfix"
+
+      - name: Validate RGBDS ROM's CGB header
+        working-directory: rgbds
+        run: |
+          byte=$(xxd -s 0x143 -l 1 -p build/mobile_adapter_testsuite_rgbds.gbc)
+          if [ "$byte" != "c0" ]; then
+            echo "ROM header byte 0x143 = $byte, expected c0 (CGB-only)"
+            exit 1
+          fi
 
       # Single rolling release: always the same tag ("latest"), replaced
       # in full every run, rather than accumulating one tag per commit.
+      # Both ROMs are published as separate assets of the same release
+      # -- rgbds/docs/status.md is not at GBDK feature parity yet (see
+      # that file), so its ROM is included for visibility/testing, not
+      # as a replacement for the GBDK one.
       - name: Publish rolling release
+        working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --yes --cleanup-tag --repo "${{ github.repository }}" || true
-          gh release create latest build/mobile_adapter_testsuite.gbc \
+          gh release create latest \
+            gbdk/build/mobile_adapter_testsuite_gbdk.gbc \
+            rgbds/build/mobile_adapter_testsuite_rgbds.gbc \
             --repo "${{ github.repository }}" \
             --title "MAGB TestSuite (${{ steps.vars.outputs.sha_short }})" \
-            --notes "Automatically built from commit ${{ steps.vars.outputs.sha_short }} on main." \
+            --notes "Automatically built from commit ${{ steps.vars.outputs.sha_short }} on main. Includes both the working GBDK (C) ROM and the in-progress RGBDS (assembly) ROM -- see rgbds/docs/status.md for what the latter currently supports." \
             --latest
