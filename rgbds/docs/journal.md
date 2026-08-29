@@ -116,6 +116,14 @@ alinhando a "linha de base" das maiúsculas com a mesma linha que as
 minúsculas já usavam, pra tudo continuar combinando visualmente.
 Testado numa tela de verdade depois, ficou bem mais legível.
 
+Sobrou um caso isolado: o "m" minúsculo (esse não fazia parte do
+redesenho, já existia de antes) usava a mesma "perna" repetida em toda
+a altura da letra, sem nada ligando as três partes no topo — na
+prática, virava só três riscos soltos na tela, a ponto de "mae" ficar
+irreconhecível. Bastou fechar o topo das três pernas com uma barra só,
+do mesmo jeito que o "n" (que sempre funcionou bem) já fazia com as
+dele.
+
 ## O que falta
 
 Com o Raw TCP confirmado também, só falta o P2P (Caller/Listener) —
