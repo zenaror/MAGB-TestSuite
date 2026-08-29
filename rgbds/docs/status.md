@@ -42,7 +42,14 @@ not implemented.
   read+checksum-validate the response -> response-ACK phase, with the
   same `MAGB_MAX_RETRANSMIT`-bounded retry loops in both directions,
   and the centralized Error Status `0x6E` recognition). Every other
-  command wrapper below is built on top of this one function.
+  command wrapper below is built on top of this one function. Live
+  status notifications (which phase of a command is in flight) go
+  through an optional callback (`MagbProtocolInit`/
+  `MagbSetStatusCallback`, defaulting to "no callback") rather than a
+  direct call into this TestSuite's own UI code -- see
+  `docs/integration-guide.md` for why: it's what lets `src/hw/`+
+  `src/protocol/` be copied into someone else's homebrew without also
+  forcing them to define a UI function just to satisfy the linker.
 - **Text renderer** (`src/app/text.asm`): an 8x8 monospace font (ASCII
   `$20`-`$5F`; the bitmap is a 1bpp rasterization of a system monospace
   typeface, generated locally, not a copied font file), `LoadFont`, and
