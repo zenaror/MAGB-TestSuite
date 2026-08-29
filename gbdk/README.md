@@ -43,7 +43,7 @@ make GBDK_HOME=/path/to/gbdk-2020/gbdk
 ```
 
 `GBDK_HOME` defaults to `/opt/gbdk`; override it however your GBDK-2020
-is installed. Output: `build/mobile_adapter_testsuite.gbc`.
+is installed. Output: `build/mobile_adapter_testsuite_gbdk.gbc`.
 
 Every build also copies the ROM into `emulador/` at the project root
 (a local emulator's working directory, e.g. a BGB install) if that
@@ -71,7 +71,7 @@ The build marks the ROM cartridge-header byte at `0x143` as `0xC0`
 (CGB-only, via `-Wm-yC`) — verify with:
 
 ```sh
-xxd -s 0x143 -l 1 build/mobile_adapter_testsuite.gbc   # expect: c0
+xxd -s 0x143 -l 1 build/mobile_adapter_testsuite_gbdk.gbc   # expect: c0
 ```
 
 ## Compile-time configuration
@@ -92,7 +92,7 @@ recompile isn't needed just to point it at a different address.
 
 ## Testing with BGB + libmobile
 
-1. Start BGB, load `build/mobile_adapter_testsuite.gbc`.
+1. Start BGB, load `build/mobile_adapter_testsuite_gbdk.gbc`.
 2. Right-click the BGB window → **Link** → **Listen**.
 3. Build and start `libmobile-bgb`'s `mobile` binary (see its own
    README).
