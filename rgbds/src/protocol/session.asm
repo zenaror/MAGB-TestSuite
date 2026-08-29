@@ -49,7 +49,82 @@ wRetry:: db          ; set by RequestAckPhase: 1 if the caller should resend the
 wChecksumOkFlag:: db ; input to ResponseAckPhase: 1 if the just-read response's checksum matched
 wReadResult:: db     ; MagbExecute's scratch: ReadResponseFrame's result, survives the ResponseAckPhase call
 
+; Optional live-status notification (see MagbSetStatusCallback below) --
+; 0 means "no callback registered", the safe default a caller gets by
+; just calling MagbProtocolInit and never touching this. This is what
+; lets src/hw/ and src/protocol/ be copied into someone else's homebrew
+; without also forcing them to define a UI function just to satisfy the
+; linker (see docs/integration-guide.md) -- this TestSuite's own
+; main.asm registers its SetStatus here instead of session.asm calling
+; it directly.
+wStatusCallback:: dw
+wStatusArg: db ; NotifyStatus's own scratch, not meant for callers
+
 SECTION "Session Code", ROM0
+
+; ---- One-time protocol-layer init / optional status callback -------------
+;
+; Zeroes wStatusCallback (WRAM is not guaranteed zero at boot on real
+; hardware -- same reasoning as SerialHwInit zeroing wSysTime). Callers
+; that don't want live status notifications need only call this once
+; and never call MagbSetStatusCallback at all.
+;
+; Output: none
+; Clobbers: A
+MagbProtocolInit::
+    xor a, a
+    ld [wStatusCallback], a
+    ld [wStatusCallback + 1], a
+    ret
+
+; Registers a function to be notified of MagbExecute's request/ACK/wait/
+; response progress -- this TestSuite's own main.asm registers its
+; SetStatus here (see EntryPoint) to drive the row-2 status line;
+; someone reusing just src/hw/+src/protocol/ can skip this call entirely
+; (MagbProtocolInit's zeroed default means no callback ever fires).
+;
+; Input: HL = callback address (0 to disable). Contract the callback
+;        must follow: Input A = 0 (about to wake the adapter/send a
+;        request), 1 (request sent, awaiting ACK), 2 (ACK'd, awaiting
+;        the response), 3 (response magic seen, reading the rest) --
+;        see docs/integration-guide.md. Index 0 is never invoked by
+;        this file itself, only by a caller before MagbBeginSession, so
+;        it's fine to leave unhandled if you don't need it.
+; Output: none
+; Clobbers: A
+MagbSetStatusCallback::
+    ld a, l
+    ld [wStatusCallback], a
+    ld a, h
+    ld [wStatusCallback + 1], a
+    ret
+
+; Internal replacement for a direct `call SetStatus`: calls through
+; [wStatusCallback] with A forwarded unchanged, or does nothing if no
+; callback is registered. SM83 has no indirect-call instruction, hence
+; the CallHL trampoline below -- `call CallHL` pushes the return address
+; (back into NotifyStatus's own `ret`) before `jp hl` hands control to
+; the real callback, so the callback's own `ret` lands correctly back
+; here regardless of what address it was.
+;
+; Input: A = status index to forward
+; Clobbers: everything (whatever the registered callback clobbers)
+NotifyStatus:
+    ld [wStatusArg], a
+    ld a, [wStatusCallback]
+    ld l, a
+    ld a, [wStatusCallback + 1]
+    ld h, a
+    ld a, l
+    or a, h
+    ret z ; no callback registered
+
+    ld a, [wStatusArg]
+    call CallHL
+    ret
+
+CallHL:
+    jp hl
 
 ; ---- Small shared helper -------------------------------------------------
 
@@ -459,8 +534,8 @@ MagbExecute::
 
 .ackOk
     push bc
-    ld a, 2 ; main.asm's STATUS_WAIT -- request+ACK done, waiting for response
-    call SetStatus
+    ld a, 2 ; STATUS_WAIT (see MagbSetStatusCallback) -- request+ACK done, waiting for response
+    call NotifyStatus
     pop bc
 
     ld a, [wExecTimeoutFrames]
@@ -472,8 +547,8 @@ MagbExecute::
     ret nz
 
     push bc
-    ld a, 3 ; main.asm's STATUS_READ -- response magic seen, reading the rest
-    call SetStatus
+    ld a, 3 ; STATUS_READ (see MagbSetStatusCallback) -- response magic seen, reading the rest
+    call NotifyStatus
     pop bc
 
     ld b, 0 ; attempt counter for the response-read/ACK retry loop
@@ -569,8 +644,8 @@ MagbBeginSession::
     or a, a
     ret nz
 
-    ld a, 1 ; main.asm's STATUS_SEND -- wake succeeded, about to send the request
-    call SetStatus
+    ld a, 1 ; STATUS_SEND (see MagbSetStatusCallback) -- wake succeeded, about to send the request
+    call NotifyStatus
 
     ld a, MAGB_TIMEOUT_FRAMES_SHORT & $FF
     ld [wExecTimeoutFrames], a
