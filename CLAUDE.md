@@ -13,11 +13,12 @@ root `README.md`):
   `Makefile`, `src/`, `include/`, `tests/`, `docs/`, build commands --
   is relative to `gbdk/`, not the repo root. `cd gbdk` before running
   `make`/`make test`/etc.
-* `rgbds/` — a planned hand-written SM83 assembly rewrite via RGBDS,
-  not started yet. When it exists, treat it as its own self-contained
-  project with its own build instructions; do not assume anything
-  GBDK-specific below (toolchain, `-msm83:gb`, SDCC quirks) applies to
-  it.
+* `rgbds/` — a hand-written SM83 assembly implementation via RGBDS,
+  early in progress (see `rgbds/docs/status.md` for exactly what's
+  implemented so far). Self-contained project with its own build
+  instructions (`rgbds/Makefile`, `rgbasm`/`rgblink`/`rgbfix`); do not
+  assume anything GBDK-specific below (toolchain, `-msm83:gb`, SDCC
+  quirks) applies to it.
 * `emulador/` and `config.bin` at the repo root are shared across
   every implementation directory (a local BGB working directory and a
   real captured Mobile Adapter config file, respectively -- see
@@ -253,7 +254,7 @@ make clean
 The expected output should be something similar to:
 
 ```text
-build/mobile_adapter_testsuite.gbc
+build/mobile_adapter_testsuite_gbdk.gbc
 ```
 
 The exact name may differ if already established by the repository.
@@ -269,7 +270,7 @@ After a successful build, validate the CGB ROM header.
 For example:
 
 ```sh
-xxd -s 0x143 -l 1 build/mobile_adapter_testsuite.gbc
+xxd -s 0x143 -l 1 build/mobile_adapter_testsuite_gbdk.gbc
 ```
 
 Expected byte:
