@@ -10,8 +10,10 @@ TestSuite, each in its own top-level directory:
 - **[`gbdk/`](gbdk/)** — the current, working implementation: C via
   GBDK-2020/SDCC. See [`gbdk/README.md`](gbdk/README.md) for build
   instructions.
-- `rgbds/` — a planned hand-written SM83 assembly rewrite via RGBDS,
-  not started yet.
+- [`rgbds/`](rgbds/) — a hand-written SM83 assembly implementation via
+  RGBDS, early in progress (hardware serial layer + packet framing so
+  far). See [`rgbds/docs/status.md`](rgbds/docs/status.md) for exactly
+  what's implemented.
 
 Each implementation is self-contained (its own build, its own docs) so
 they can be developed and released independently. [`CLAUDE.md`](CLAUDE.md)

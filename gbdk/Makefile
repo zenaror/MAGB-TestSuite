@@ -1,7 +1,7 @@
 # Makefile for the Mobile Adapter GB TestSuite (GBC-only, GBDK-2020).
 #
 # Usage:
-#   make               build build/mobile_adapter_testsuite.gbc
+#   make               build build/mobile_adapter_testsuite_gbdk.gbc
 #   make test          build and run the host-side protocol unit tests
 #   make clean         remove build/ artifacts
 #
@@ -18,7 +18,11 @@ LCC       := $(GBDK_HOME)/bin/lcc
 CC        ?= cc
 
 BUILD_DIR := build
-ROM       := $(BUILD_DIR)/mobile_adapter_testsuite.gbc
+# Deliberately a different filename than rgbds/build/mobile_adapter_testsuite_rgbds.gbc
+# -- both builds copy into the shared ../emulador/ below, so distinct
+# names keep one implementation's ROM from silently overwriting the
+# other's there.
+ROM       := $(BUILD_DIR)/mobile_adapter_testsuite_gbdk.gbc
 
 # Local emulator working directory (e.g. a BGB install), at the
 # repo root (../emulador -- shared across implementations, one level
