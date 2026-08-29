@@ -657,7 +657,8 @@ flow.
   'm' the same treatment -- a solid connecting bar (`$F8`, spanning all
   three legs) on its own top row, legs (`$A8`) below it. Verified via
   PyBoy (rendered "mae" through the actual font tiles and read the
-  pixels back) -- not yet re-confirmed on a real screen.
+  pixels back), then **confirmed legible on a real screen** (project
+  owner, 2026-08-30).
 - **A-Z/0-9 were almost illegible -- and the bitmap data itself showed
   why.** Reported (2026-08-30) after extended real-hardware use across
   every ISP/HTTP target. The original set was an algorithmically
