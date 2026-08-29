@@ -161,9 +161,10 @@ assume success from a single byte.
 ## 6. Recipe: fetch something over the internet (ISP/HTTP)
 
 This is a real, working, tested sequence -- `src/main.asm`'s
-`EntryPoint` is a complete, error-checked reference implementation of
-exactly this (including the HTTP response-polling loop), the assembly
-equivalent of gbdk's `test_isp_http()`:
+`RunIspHttpTest` (reachable from this TestSuite's own main menu's
+"ISP/HTTP" item) is a complete, error-checked reference implementation
+of exactly this (including the HTTP response-polling loop), the
+assembly equivalent of gbdk's `test_isp_http()`:
 
 ```asm
     ld hl, sMyPhoneNumber   ; e.g. your ISP's dial string
