@@ -36,7 +36,7 @@ wRemoteErrorCode:: db
 wRxCommand:: db
 wRxReserved:: db
 wRxPayloadLen:: db
-wRxPayload:: ds PROTO_MAX_PAYLOAD_LEN
+wRxPayload:: ds PROTO_MAX_RX_PAYLOAD_LEN ; 255, not PROTO_MAX_PAYLOAD_LEN -- see protocol.inc
 
 ; MagbExecute's own call-parameter block (see the file header comment
 ; for why) and small scratch flags used across calls that would
@@ -165,7 +165,7 @@ SendRequestFrame:
     push bc ; BC = remaining length, must survive the transfer call
     ld a, [de]
     inc de
-    call SerialTransferByte
+    call TracedTransferByte
     pop bc
     jr c, .timeout
     ld [wAck1Out], a
@@ -211,7 +211,7 @@ RequestAckPhase:
     call MaybeSetAdapterDevice
 
     ld a, MAGB_GBC_DEVICE_ACK
-    call SerialTransferByte
+    call TracedTransferByte
     jr c, .timeout
 
     cp a, MAGB_ACK_ERR_UNSUPPORTED
@@ -228,10 +228,10 @@ RequestAckPhase:
     call MaybeSetAdapterDevice
 
     ld a, MAGB_GBC_WAIT ; filler
-    call SerialTransferByte
+    call TracedTransferByte
     jr c, .timeout
     ld a, MAGB_GBC_WAIT ; mandatory "go ahead and process"
-    call SerialTransferByte
+    call TracedTransferByte
     jr c, .timeout
 
     xor a, a
@@ -275,7 +275,7 @@ WaitForResponseStart:
 
 .loop
     ld a, MAGB_GBC_WAIT
-    call SerialTransferByte
+    call TracedTransferByte
     jr c, .timeout
 
     cp a, MAGB_ADAPTER_WAIT
@@ -344,7 +344,7 @@ SECTION "Session Code 3", ROM0
 ; else in this file).
 ReadResponseFrame:
     ld a, MAGB_GBC_WAIT
-    call SerialTransferByte
+    call TracedTransferByte
     jp c, .timeout
     cp a, MAGB_MAGIC_2
     jp nz, .badMagic
@@ -352,34 +352,42 @@ ReadResponseFrame:
     ld de, 0 ; running checksum accumulator
 
     ld a, MAGB_GBC_WAIT
-    call SerialTransferByte
+    call TracedTransferByte
     jp c, .timeout
     ld [wRxCommand], a
     call ChecksumAddByte
 
     ld a, MAGB_GBC_WAIT
-    call SerialTransferByte
+    call TracedTransferByte
     jp c, .timeout
     ld [wRxReserved], a
     call ChecksumAddByte
 
     ld a, MAGB_GBC_WAIT
-    call SerialTransferByte
+    call TracedTransferByte
     jp c, .timeout
     push af
     call ChecksumAddByte
     pop af
     or a, a
-    jp nz, .badLength ; length_hi must be 0: this ROM never expects a >254 byte payload
+    jp nz, .badLength ; length_hi must be 0 -- the real adapter never sends a >255 byte payload (Dan Docs, see protocol.inc)
 
     ld a, MAGB_GBC_WAIT
-    call SerialTransferByte
+    call TracedTransferByte
     jp c, .timeout
     push af
     call ChecksumAddByte
     pop af
-    cp a, PROTO_MAX_PAYLOAD_LEN + 1
-    jp nc, .badLength ; also catches a genuinely oversized payload this build can't buffer
+    ; No upper-bound check here: the length-low byte is already an 8-bit
+    ; value (0..255), and PROTO_MAX_RX_PAYLOAD_LEN (255, protocol.inc)
+    ; -- the real adapter's own documented receive limit -- is exactly
+    ; that type's maximum, so every possible byte value is already
+    ; legal and wRxPayload (sized for PROTO_MAX_RX_PAYLOAD_LEN) already
+    ; has room for it. A stricter `> PROTO_MAX_PAYLOAD_LEN(254)` check
+    ; used to live here and wrongly reject a real, valid 255-byte
+    ; Transfer Data response (ISP/HTTP's Tamago Egg fetch) as
+    ; MAGB_ERR_BAD_LENGTH -- matches gbdk's own parser
+    ; (magb_packet.c's magb_parser_feed()), which has no such check either.
     ld [wRxPayloadLen], a
 
     ld b, a
@@ -389,7 +397,7 @@ ReadResponseFrame:
 .payloadLoop
     push hl ; SerialTransferByte clobbers HL; DE is already committed to the checksum
     ld a, MAGB_GBC_WAIT
-    call SerialTransferByte
+    call TracedTransferByte
     pop hl
     jp c, .timeout
     ld [hl+], a
@@ -399,12 +407,12 @@ ReadResponseFrame:
 
 .payloadDone
     ld a, MAGB_GBC_WAIT
-    call SerialTransferByte
+    call TracedTransferByte
     jp c, .timeout
     ld [wChecksumRecvHi], a
 
     ld a, MAGB_GBC_WAIT
-    call SerialTransferByte
+    call TracedTransferByte
     jp c, .timeout
     ld c, a ; C = checksum_lo
     ld a, [wChecksumRecvHi]
@@ -447,13 +455,13 @@ ResponseAckPhase:
     ld [wChecksumOkFlag], a
 
     ld a, MAGB_GBC_WAIT ; adapter device id, opportunistic
-    call SerialTransferByte
+    call TracedTransferByte
     jr c, .timeout
     and a, DEVICE_ID_MASK
     call MaybeSetAdapterDevice
 
     ld a, MAGB_GBC_WAIT ; always 0x00 from the adapter, don't-care
-    call SerialTransferByte
+    call TracedTransferByte
     jr c, .timeout
 
     ld a, [wChecksumOkFlag]
@@ -462,7 +470,7 @@ ResponseAckPhase:
     jr nz, .sendAck
     ld a, MAGB_ACK_ERR_CHECKSUM
 .sendAck
-    call SerialTransferByte
+    call TracedTransferByte
     jr c, .timeout
 
     ld a, [wChecksumOkFlag]
@@ -616,7 +624,7 @@ MagbExecute::
 ; Clobbers: everything
 MagbWakeAdapter::
     xor a, a
-    call SerialTransferByte
+    call TracedTransferByte
     jr c, .timeout
 
     ld b, 7
@@ -741,14 +749,15 @@ MagbEndSession::
 ;
 ; Input:  HL = phone number ASCII digits (ROM, NOT null-terminated --
 ;         length given explicitly), B = digit count (1..MAGB_MAX_PHONE_NUMBER_LEN)
+;         Caller must set [wExecTimeoutFrames] first -- an ISP dial and
+;         a P2P dial need genuinely different budgets
+;         (MAGB_TIMEOUT_FRAMES_LONG vs _P2P_CALL, protocol.inc), unlike
+;         every other command wrapper in this file, which picks its own
+;         fixed timeout internally. Matches gbdk's magb_dial(), whose
+;         timeout_frames is a real parameter for the same reason.
 ; Output: A = result (0=OK)
 ; Clobbers: everything
 MagbDial::
-    ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
-    ld [wExecTimeoutFrames], a
-    ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
-    ld [wExecTimeoutFrames + 1], a
-
     push bc ; preserve the digit count across the validation-byte lookup
     ld a, [wAdapterDevice]
     cp a, MAGB_DEVICE_ADAPTER_BLUE
@@ -786,6 +795,43 @@ MagbDial::
     xor a, a
     ret
 .unexpected
+    ld a, MAGB_ERR_UNEXPECTED_COMMAND
+    ret
+
+; ---- Wait For Telephone Call (0x14) ---------------------------------------
+;
+; The P2P Listener side's equivalent of Dial -- answers/detects an
+; incoming call instead of placing one. libmobile's own handler only
+; waits ~1 real second before giving up with an Error Status meaning
+; "no call yet" (unlike Dial, which blocks for as long as a real
+; connect() takes) -- gbdk's own P2P Listener confirmed this the hard
+; way and retries this call itself (MAGB_TIMEOUT_FRAMES_SHORT each
+; attempt) rather than expecting one call to block for the whole wait;
+; main.asm's P2P Listener does the same. See gbdk's magb_wait_for_call()
+; -- this always uses MAGB_TIMEOUT_FRAMES_SHORT there too, so it's
+; hardcoded here rather than taking a parameter like MagbDial does.
+;
+; Output: A = result (0=OK) -- a call arrived
+; Clobbers: everything
+MagbWaitForCall::
+    ld a, MAGB_TIMEOUT_FRAMES_SHORT & $FF
+    ld [wExecTimeoutFrames], a
+    ld a, MAGB_TIMEOUT_FRAMES_SHORT >> 8
+    ld [wExecTimeoutFrames + 1], a
+
+    ld a, MAGB_CMD_WAIT_CALL
+    ld de, 0
+    ld c, 0
+    call MagbExecute
+    or a, a
+    ret nz
+
+    ld a, [wRxCommand]
+    cp a, MAGB_CMD_WAIT_CALL | MAGB_RESPONSE_BIT
+    jr nz, .unexpectedWaitCall
+    xor a, a
+    ret
+.unexpectedWaitCall
     ld a, MAGB_ERR_UNEXPECTED_COMMAND
     ret
 
@@ -1022,7 +1068,10 @@ MagbTcpOpen::
 
 SECTION "TCP Scratch", WRAM0
 wTcpOpenPayload: ds 6 ; ip[4] + port_hi + port_lo
-wTcpConnId: ds 1
+; Exported (not just internal) so main.asm's P2P code can set it
+; directly to MAGB_P2P_CONNECTION_ID before calling MagbTransferData --
+; see that function's own doc comment for why.
+wTcpConnId:: ds 1
 
 SECTION "Session Code 8", ROM0
 
@@ -1082,11 +1131,21 @@ SECTION "Session Code 9", ROM0
 ; Input:  DE = data pointer (ignored if C == 0), C = data length
 ;         (0..PROTO_MAX_PAYLOAD_LEN-1)
 ;         HL = output buffer pointer, B = output buffer capacity
+;         Caller must set [wTcpConnId] first -- despite the name, this
+;         is really just "which connection id this transfer targets":
+;         MagbTcpOpen fills it for a TCP session, but a P2P session has
+;         no Open call, so P2P callers must set it to
+;         MAGB_P2P_CONNECTION_ID (protocol.inc) themselves before
+;         calling this. Caller must also set [wExecTimeoutFrames] --
+;         an HTTP poll and a P2P send/poll need genuinely different
+;         budgets (MAGB_TIMEOUT_FRAMES_LONG vs _SHORT), matching gbdk's
+;         magb_transfer_data(), whose timeout_frames is a real parameter
+;         for the same reason.
 ; Output: A = result (0=OK). On OK: [wXferGotLen] = bytes actually copied
 ;         into the output buffer (may be less than what the adapter sent,
 ;         the caller re-polls for the rest), [wXferRemoteClosed] = 1 if
 ;         the response was Transfer Data End (0x1F|0x80), meaning the
-;         remote TCP peer closed the connection.
+;         remote peer (TCP or P2P) closed the connection.
 ; Clobbers: everything
 MagbTransferData::
     ld a, c
@@ -1120,11 +1179,6 @@ MagbTransferData::
     dec b
     jr nz, .copyData
 .noData
-
-    ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
-    ld [wExecTimeoutFrames], a
-    ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
-    ld [wExecTimeoutFrames + 1], a
 
     ld a, c ; c still holds data_len (the copy loop only touched b)
     inc a ; +1 for the conn_id byte
@@ -1191,4 +1245,188 @@ MagbTransferData::
     ret
 .tooLarge
     ld a, MAGB_ERR_PAYLOAD_TOO_LARGE
+    ret
+
+SECTION "Config Scratch", WRAM0
+wConfigData:: ds MAGB_CONFIG_SIZE ; full 192-byte blob, filled by MagbReadConfig
+wConfigHalf: db                  ; 0 = first 96 bytes, 1 = second
+wConfigReqPayload: ds 2          ; [offset, length] -- MagbExecute's own request payload
+
+SECTION "Session Code 10", ROM0
+
+; ---- Read Configuration Data (0x19) ---------------------------------------
+;
+; Two requests, each [offset, MAGB_CONFIG_CHUNK] -- offset 0 then
+; MAGB_CONFIG_CHUNK (96) -- assembled into one MAGB_CONFIG_SIZE-byte
+; blob. Each response echoes payload[0] = the requested offset before
+; the actual chunk bytes; checked here, same as gbdk's magb_read_config().
+;
+; Output: A = result (0=OK); on success wConfigData holds the full blob
+; Clobbers: everything
+MagbReadConfig::
+    xor a, a
+    ld [wConfigHalf], a
+.halfLoop
+    ld a, [wConfigHalf]
+    and a, a
+    jr z, .offsetIsZero
+    ld a, MAGB_CONFIG_CHUNK
+.offsetIsZero
+    ld [wConfigReqPayload], a
+    ld a, MAGB_CONFIG_CHUNK
+    ld [wConfigReqPayload + 1], a
+
+    ld a, MAGB_TIMEOUT_FRAMES_SHORT & $FF
+    ld [wExecTimeoutFrames], a
+    ld a, MAGB_TIMEOUT_FRAMES_SHORT >> 8
+    ld [wExecTimeoutFrames + 1], a
+
+    ld a, MAGB_CMD_READ_CONFIG
+    ld de, wConfigReqPayload
+    ld c, 2
+    call MagbExecute
+    or a, a
+    ret nz
+
+    ld a, [wRxCommand]
+    cp a, MAGB_CMD_READ_CONFIG | MAGB_RESPONSE_BIT
+    jr nz, .unexpected
+
+    ld a, [wRxPayloadLen]
+    cp a, MAGB_CONFIG_CHUNK + 1
+    jr nz, .badLength
+
+    ld a, [wConfigReqPayload]
+    ld b, a
+    ld a, [wRxPayload]
+    cp a, b
+    jr nz, .badLength
+
+    ld a, [wConfigReqPayload]
+    ld l, a
+    ld h, 0
+    ld de, wConfigData
+    add hl, de ; hl = destination in wConfigData
+    ld de, wRxPayload + 1 ; source: response payload, past the echoed offset
+    ld b, MAGB_CONFIG_CHUNK
+.copyLoop
+    ld a, [de]
+    ld [hl+], a
+    inc de
+    dec b
+    jr nz, .copyLoop
+
+    ld a, [wConfigHalf]
+    or a, a
+    jr nz, .done ; already did half 1 -- both halves read
+    ld a, 1
+    ld [wConfigHalf], a
+    jr .halfLoop
+
+.done
+    xor a, a
+    ret
+.unexpected
+    ld a, MAGB_ERR_UNEXPECTED_COMMAND
+    ret
+.badLength
+    ld a, MAGB_ERR_BAD_LENGTH
+    ret
+
+SECTION "Trace State", WRAM0
+wTraceHead:: db                         ; next write index, 0..MAGB_TRACE_LEN-1
+wTraceCount:: db                        ; valid entries, saturates at MAGB_TRACE_LEN
+wTraceBuf:: ds MAGB_TRACE_LEN * 2       ; [direction, value] pairs, oldest overwritten first
+
+SECTION "Session Code 11", ROM0
+
+; Appends one trace entry to the ring buffer, advancing wTraceHead and
+; growing wTraceCount up to MAGB_TRACE_LEN. Mirrors gbdk's
+; magb_trace_record() exactly (same ring semantics) -- MAGB_TRACE_LEN
+; being a power of two turns its "% MAGB_TRACE_LEN" into a plain AND.
+;
+; Input: A = value, D = direction (MAGB_TRACE_TX or MAGB_TRACE_RX)
+; Clobbers: everything
+RecordTraceByte:
+    ld c, a ; c = value
+    ld a, [wTraceHead]
+    ld l, a
+    ld h, 0
+    add hl, hl ; *2 (2 bytes per entry)
+    ld a, l
+    add a, low(wTraceBuf)
+    ld l, a
+    ld a, h
+    adc a, high(wTraceBuf)
+    ld h, a
+    ld [hl], d ; direction
+    inc hl
+    ld [hl], c ; value
+
+    ld a, [wTraceHead]
+    inc a
+    and a, MAGB_TRACE_LEN - 1
+    ld [wTraceHead], a
+
+    ld a, [wTraceCount]
+    cp a, MAGB_TRACE_LEN
+    jr nc, .full
+    inc a
+    ld [wTraceCount], a
+.full
+    ret
+
+; Drop-in replacement for SerialTransferByte with the exact same
+; contract (Input A=tx; Output A=rx/carry=timeout; Clobbers HL) --
+; every one of this file's ~17 call sites goes through this instead of
+; calling SerialTransferByte directly, so trace recording only needs
+; one call-site swap per caller rather than duplicated bookkeeping at
+; each one. Matches gbdk's magb_session.c's own internal xfer() helper,
+; which every session-layer function calls instead of
+; serial_transfer_byte() directly. Nothing is recorded on a timeout,
+; same as gbdk's xfer() (it only calls magb_trace_record() when
+; serial_transfer_byte() succeeds).
+;
+; Input:   A = byte to transmit
+; Output:  A = byte received (only meaningful if carry is clear)
+;          carry SET   = timed out, transfer aborted, no byte received
+;          carry CLEAR = success
+; Clobbers: HL
+;
+; BC/DE are saved/restored around the whole body (not just "not
+; touched") specifically because several call sites rely on
+; SerialTransferByte's documented "only HL" clobber list to carry a
+; loop counter or pointer straight across the call (e.g.
+; SendRequestFrame's transmit loop) -- RecordTraceByte itself clobbers
+; everything, so this must shield callers from that, not just from its
+; own B/C scratch use below.
+TracedTransferByte:
+    push bc
+    push de
+    ld b, a ; stash tx
+    call SerialTransferByte
+    jr c, .timedOut
+
+    ld c, a ; stash rx
+    push bc
+    ld a, b
+    ld d, MAGB_TRACE_TX
+    call RecordTraceByte
+    pop bc
+    push bc
+    ld a, c
+    ld d, MAGB_TRACE_RX
+    call RecordTraceByte
+    pop bc
+    ld a, c ; rx byte, the return value
+
+    pop de
+    pop bc
+    or a, a ; clear carry: success
+    ret
+
+.timedOut
+    pop de
+    pop bc
+    scf ; SerialTransferByte's own carry survived the pops (only POP AF touches flags), but be explicit
     ret
