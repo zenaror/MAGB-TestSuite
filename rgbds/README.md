@@ -27,3 +27,11 @@ Output: `build/mobile_adapter_testsuite_rgbds.gbc`, a CGB-only
 ```sh
 make clean
 ```
+
+## Using this in your own homebrew
+
+Want the Mobile Adapter GB protocol code in your own ROM, not just to
+run this diagnostic one? `docs/integration-guide.md` covers exactly
+what to copy (`src/hw/`, `src/protocol/`, not `src/app/`), the one real
+coupling point you need to stub out (`SetStatus::`), and worked recipes
+for a session and an ISP/HTTP fetch.

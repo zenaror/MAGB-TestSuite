@@ -54,6 +54,17 @@ EntryPoint:
     ; isn't a CGB.
     call SerialHwInit
 
+    ; Registers this ROM's own SetStatus (row 2, below) as the protocol
+    ; layer's live-status notification -- see session.asm's
+    ; MagbProtocolInit/MagbSetStatusCallback and docs/integration-guide.md.
+    ; This is what lets src/hw/+src/protocol/ be copied into someone
+    ; else's homebrew without also forcing them to define a SetStatus of
+    ; their own: they simply never call MagbSetStatusCallback, and
+    ; MagbProtocolInit's zeroed default means no callback ever fires.
+    call MagbProtocolInit
+    ld hl, SetStatus
+    call MagbSetStatusCallback
+
     call InitDisplayBlank
     call LoadFont
     call ClearTextScreen
