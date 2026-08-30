@@ -668,7 +668,7 @@ flow.
   report, not just a matter of taste: `'O'`'s two side-strokes sat at
   different columns on different rows (not a symmetric curve at all),
   for one. Before touching the bitmap data, the project owner also
-  asked whether `gbdk/references/pokecrystal-mobile-eng`'s `font.png`
+  asked whether pokecrystal-mobile-eng's `font.png`
   could be used as a basis -- refused: that file is the font extracted
   from the real Pokemon Crystal ROM (the reference repo's own README
   says so), with no license, which is exactly the "copyrighted
@@ -746,7 +746,7 @@ flow.
   in a period" as the end of DATA one line early.** Found from the same
   real-hardware session's Email Send run: libmobile-bgb showed a real
   `500 command not recognized` after an otherwise-successful `250 OK`.
-  Traced to `references/reon/mail/smtpConnection.js`'s `_handleData()`:
+  Traced to REON's `mail/smtpConnection.js`'s `_handleData()`:
   it decides a line is the lone SMTP end-of-DATA terminator via
   `data.endsWith(".\r\n")` on *each line individually*, not "is this
   line exactly `.`". This ROM's test message's own body line, `"Hello

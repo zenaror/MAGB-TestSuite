@@ -7,21 +7,22 @@ is like this because three independent implementations agree" and
 "this byte is a guess" (there should be none of the latter in this
 codebase — see Section 53 of the project brief).
 
-Primary references (cloned shallowly into `references/`, git-ignored):
+Primary references:
 
 - Dan Docs, Mobile Adapter GB — <https://shonumi.github.io/dandocs.html#magb>
-- `references/pokecrystal-mobile-eng` — <https://github.com/gb-mobile/pokecrystal-mobile-eng>
-- `references/libma` — <https://github.com/mid-kid/libma>
-- `references/libmobile` — <https://github.com/REONTeam/libmobile> (the actual test target)
-- `references/libmobile-bgb` — <https://github.com/REONTeam/libmobile-bgb>
-- `references/reon` — <https://github.com/REONTeam/reon>
-- `references/gba-link-connection` — <https://github.com/afska/gba-link-connection>, `lib/LinkMobile.hpp`
+- pokecrystal-mobile-eng — <https://github.com/gb-mobile/pokecrystal-mobile-eng>
+- libma — <https://github.com/mid-kid/libma>
+- libmobile — <https://github.com/REONTeam/libmobile> (the actual test target)
+- libmobile-bgb — <https://github.com/REONTeam/libmobile-bgb>
+- REON — <https://github.com/REONTeam/reon>
+- gba-link-connection — <https://github.com/afska/gba-link-connection>, `lib/LinkMobile.hpp`
 - <https://gbdk.org/docs/api/> and the headers actually bundled with the installed GBDK-2020 4.5.0 release
 
 Every hex value below was read out of one of these source trees, not
-transcribed from a summary. File:line citations refer to the state of
-those repositories at the time of this writing (shallow clones, so no
-fixed commit hash is pinned — re-check if a citation looks stale).
+transcribed from a summary. File:line citations below refer to the
+state of those projects at the time of this writing (no fixed commit
+hash is pinned — re-check against the upstream project if a citation
+looks stale).
 
 ## Serial clock: why 0x83, not 0x81
 
@@ -110,7 +111,7 @@ packet content or session logic.
 
 The fix is confirmed against Pokémon Crystal's own real, working
 Mobile Adapter driver: every single `rSC` write site in
-`references/pokecrystal-mobile-eng/lib/mobile/main.asm` (both the CGB
+pokecrystal-mobile-eng's `lib/mobile/main.asm` (both the CGB
 high-speed case, `Function111b2e`, and the plain external-clock case
 in `home/serial.asm`'s `Serial::` handler) writes the clock-source/
 speed bits with the start bit clear first, then writes the start bit
@@ -391,7 +392,7 @@ recognized payload.)
   available egg download from the Mobile Adapter datacenter.
   `CGB-BXTJ` is Pokémon Crystal (Japan)'s real cartridge code, and the
   requested file genuinely exists in REON's test dataset
-  (`references/reon/web/cgb/download/01/CGB-BXTJ/tamago/index.txt`).
+  (REON's `web/cgb/download/01/CGB-BXTJ/tamago/index.txt`).
   It requires no authentication — REON's `doAuth()` (`web/cgb/auth.php`)
   only challenges a request whose filename has a numeric cost prefix
   (e.g. `10.foo.php`); `index.txt` has none — which makes it an ideal
@@ -421,7 +422,7 @@ recognized payload.)
   `magb_network.h`), exactly like a real game would. The dialogue
   itself (`test_isp_email_send`/`_recv` in `test_runner.c`) was
   confirmed against REON's real mail server source
-  (`references/reon/mail/smtp.js`, `smtpConnection.js`,
+  (REON's `mail/smtp.js`, `smtpConnection.js`,
   `pop3Connection.js`): SMTP takes mail with no authentication at all
   (delivery only actually happens if `RCPT TO` matches a real
   account's address); POP3 authenticates with `USER
@@ -603,7 +604,7 @@ hex of the same first 32 bytes). Get this wrong and the server can't
 even find the right session to validate against, regardless of
 whether the password hash is correct.
 
-**Re-verified 2026-08-26 directly against `references/reon/web/cgb/auth.php`**
+**Re-verified 2026-08-26 directly against REON's `web/cgb/auth.php`**
 (the project owner hit a real, persistent `32-401` even after the
 login-source fix below): read the live `doAuth()` source line-by-line
 again, not just this TestSuite's own prior summary of it. Confirms:
@@ -677,7 +678,7 @@ This deliberately does **not** rely on REON's optional 15-minute
 utility-auth session cache (`auth.php`'s
 `$_SESSION['utility_authed_user_id']`/`_until`, checked at the top of
 `doAuth()`'s `type==2` branch) to skip the second challenge --
-`references/reon/web/cgb/pokemon/news.php`'s own comment on that path
+REON's `web/cgb/pokemon/news.php`'s own comment on that path
 says only that "the official client... may not perform an additional
 401-challenge retry," not that it never does. Doing the full
 challenge/response twice is still correct against the documented
@@ -746,7 +747,7 @@ a power cycle, which was never asked for.
 
 ## P2P: direct-IP dialing and relay-based calls are different mechanisms
 
-Confirmed by reading `references/libmobile/commands.c` directly, after
+Confirmed by reading libmobile's `commands.c` directly, after
 this ROM's own docs previously (incorrectly) implied a relay-based P2P
 call was just "the same test with a different dialed number":
 
@@ -767,11 +768,11 @@ ever looking at the dialed number as an address:
   firewall blocking it, for a two-machine setup).
 
 - **Relay enabled** (`mobile` process started with `--relay
-  <server-addr>`, see `references/libmobile-bgb/source/main.c`): the
+  <server-addr>`, see libmobile-bgb's `source/main.c`): the
   *same* Dial command instead opens a TCP connection to the configured
   relay **server**, then hands the dialed number to that server's own
   call-matching protocol (`mobile_relay_proc_call()` in
-  `references/libmobile/relay.c`) -- the number is never parsed as an
+  libmobile's `relay.c`) -- the number is never parsed as an
   IP in this mode. Both peers connect to the relay server, which
   brokers the match; this is a genuine REON-relay-style rendezvous
   connection, architecturally closer to the ISP/HTTP tests' plain TCP
