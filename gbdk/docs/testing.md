@@ -113,7 +113,7 @@ ROM — see `docs/protocol-notes.md`) as `127.0.0.1`, i.e. "the same
 machine, if both `libmobile-bgb` instances are reachable on it."
 
 This exercises libmobile's **direct-IP P2P** path specifically
-(`references/libmobile/commands.c`: the 12-digit dial payload is parsed
+(libmobile's `commands.c`: the 12-digit dial payload is parsed
 locally as a raw IPv4 address, then the adapter opens a normal outbound
 TCP connection straight to `<that IP>:p2p_port`, default port 1027 --
 `MOBILE_DEFAULT_P2P_PORT` in `mobile.h` -- while the Listener side's
@@ -125,10 +125,10 @@ A **relay-based** P2P call (a real REON-style rendezvous relay server)
 is a *different, adapter-level* mechanism, not a variant of this same
 test reachable by dialing a different number: it only activates when
 the `mobile` process itself is started with `--relay <server-addr>`
-(see `references/libmobile-bgb/source/main.c`), and once active, the
+(see libmobile-bgb's `source/main.c`), and once active, the
 dialed number is sent to *that relay server's own* call-matching
-protocol (`mobile_relay_proc_call()` in `references/libmobile/
-commands.c`) instead of ever being parsed as an IP -- an entirely
+protocol (`mobile_relay_proc_call()` in libmobile's
+`commands.c`) instead of ever being parsed as an IP -- an entirely
 different TCP connection (to the relay server, not to the peer) and
 handshake. This ROM's P2P test does not exercise that path, and there
 is no dialed-number value that would select it; it is exclusively

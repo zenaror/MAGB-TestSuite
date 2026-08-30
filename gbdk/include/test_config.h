@@ -152,7 +152,7 @@
  * enabled on the `mobile` process itself (`--relay <addr>`, not this
  * ROM), and once active the dialed number goes to the relay server's
  * own call-matching protocol instead of ever being parsed as an IP
- * (see references/libmobile/commands.c: command_tel() branches on
+ * (see libmobile's commands.c: command_tel() branches on
  * adapter->config.relay.type before this parsing is ever reached).
  * Editable at runtime from the P2P Caller menu (digit-entry screen). */
 #define TEST_P2P_PHONE        "127000000001"

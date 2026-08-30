@@ -33,8 +33,9 @@ xxd -s 0x143 -l 1 build/mobile_adapter_testsuite_gbdk.gbc   # expect: c0
 
 `make test`'s `test_config` binary partly validates against a real
 captured Mobile Adapter GB configuration file, expected at
-`../config.bin` (repo root, shared, gitignored) -- skipped with a
-clear message, not a failure, if that file is missing.
+`../config.bin` (repo root, shared -- not part of this repository, see
+the root [`README.md`](../README.md)) -- skipped with a clear message,
+not a failure, if that file is missing.
 
 Compile-time defaults (ISP dial string/login, DNS, HTTP host/port/path,
 default P2P phone/IP) live in `include/test_config.h`, overridable via

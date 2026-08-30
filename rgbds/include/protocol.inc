@@ -162,7 +162,7 @@ DEF MAGB_TIMEOUT_FRAMES_LONG EQU 900 ; ~15s @ ~59.7Hz
 ; A P2P Dial needs even more headroom than an ISP Dial -- matches
 ; gbdk/src/app/test_runner.c's MAGB_TIMEOUT_FRAMES_P2P_CALL exactly,
 ; there confirmed against a real two-machine BGB session and against
-; references/libmobile/commands.c's command_tel_ip() (no internal
+; libmobile's commands.c's command_tel_ip() (no internal
 ; cutoff of its own, just polls connect() until it succeeds or truly
 ; fails) as the right shape for a single long-timeout Dial request.
 DEF MAGB_TIMEOUT_FRAMES_P2P_CALL EQU 1500 ; ~25s @ ~59.7Hz
