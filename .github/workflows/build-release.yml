@@ -100,7 +100,8 @@ jobs:
       - name: Build RGBDS ROM
         working-directory: rgbds
         run: |
-          make RGBASM="$HOME/rgbds/rgbasm" RGBLINK="$HOME/rgbds/rgblink" RGBFIX="$HOME/rgbds/rgbfix"
+          make RGBASM="$HOME/rgbds/rgbasm" RGBLINK="$HOME/rgbds/rgblink" RGBFIX="$HOME/rgbds/rgbfix" \
+            RGBASMFLAGS_EXTRA="-D BUILD_VERSION_STR=${{ steps.vars.outputs.sha_short }}"
 
       - name: Validate RGBDS ROM's CGB header
         working-directory: rgbds
