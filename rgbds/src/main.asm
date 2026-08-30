@@ -2931,8 +2931,8 @@ sSmtpQuitEnd:
 ; know which messages in the mailbox are safe to delete.
 ;
 ; The body line deliberately does NOT end in a literal "." right before
-; its CRLF (confirmed against REON's real references/reon/mail/
-; smtpConnection.js: `_handleData()` decides "this is the lone
+; its CRLF (confirmed against REON's real mail/smtpConnection.js:
+; `_handleData()` decides "this is the lone
 ; end-of-DATA terminator line" via `data.endsWith(".\r\n")` on each
 ; line *individually*, not "is this line exactly '.'" -- so a message
 ; line that happens to end its own sentence with a period, like "...ROM."

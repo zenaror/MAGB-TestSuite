@@ -812,7 +812,7 @@ void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *
  * ordinary line-based text protocols run over a plain TCP connection
  * (port 25 / 110), exactly like the HTTP test above uses port 80. The
  * exact dialogue below was confirmed against REON's real mail server
- * source (references/reon/mail/smtp.js, smtpConnection.js,
+ * source (REON's mail/smtp.js, smtpConnection.js,
  * pop3Connection.js), not guessed: SMTP accepts mail with no
  * authentication at all (a message only actually gets delivered if
  * RCPT TO matches a real account's email -- see
@@ -1046,7 +1046,7 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
     }
 
     if (!line_step(ctx, conn_id,
-            kTestEmailSubjectLine "\r\n\r\nHello from the Mobile Adapter GB TestSuite ROM.\r\n.\r\n",
+            kTestEmailSubjectLine "\r\n\r\nHello from the Mobile Adapter GB TestSuite ROM\r\n.\r\n",
             line, sizeof(line), "250", &r, &remote_closed)) {
         result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MESSAGE REJECTED");
         isp_http_cleanup(ctx, conn_id, true, true);
@@ -1437,7 +1437,7 @@ static magb_result_t p2p_send_frame(magb_context_t *ctx, uint8_t sequence,
  * timeouts commonly run 20s+ on their own; cutting this TestSuite's
  * own wait shorter than that just means it reports its own timeout
  * before the adapter ever gets to report the real failure reason.
- * Confirmed against references/libmobile/commands.c
+ * Confirmed against libmobile's commands.c
  * (command_tel_ip(): no internal cutoff, just polls
  * mobile_cb_sock_connect() until it succeeds or truly fails) that a
  * single long-timeout request is the right shape for Dial specifically
@@ -1448,13 +1448,13 @@ static magb_result_t p2p_send_frame(magb_context_t *ctx, uint8_t sequence,
 /* Unlike Dial, libmobile's own Wait For Call (direct-IP) only waits
  * ~1 real second internally before giving up with an Error Status,
  * regardless of the timeout_frames this ROM asks for --
- * references/libmobile/commands.c's command_wait_call(),
+ * libmobile's commands.c's command_wait_call(),
  * MOBILE_CONNECTION_WAIT case: it latches MOBILE_TIMER_COMMAND once
  * at the start and, from then on, unconditionally returns
  * error_packet(packet, 0) once 1000ms have passed, on every single
  * poll, forever -- it never gets re-latched. This isn't a bug to work
  * around quietly: it's confirmed as the *intended* protocol shape by
- * the real Pokemon Crystal disassembly (references/pokecrystal-mobile-eng/
+ * the real Pokemon Crystal disassembly (pokecrystal-mobile-eng's
  * lib/mobile/main.asm, Function1123b6 / .asm_1123c6): when the response
  * to Wait For Call is command 0xEE (Error Status), the game just
  * resends the exact same Wait For Call packet again. So this ROM does
