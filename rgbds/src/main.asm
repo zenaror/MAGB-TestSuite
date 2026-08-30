@@ -83,6 +83,7 @@ EntryPoint:
 
     call InitDisplayBlank
     call LoadFont
+    call SoundInit
 
     ; wMenuSelected is only zeroed here, once -- ShowMenu itself doesn't
     ; touch it, so the highlighted item survives a round trip into a
@@ -266,6 +267,7 @@ ShowMenu:
     ld a, b
     and a, PAD_A
     jr z, .checkSelect
+    call SoundSelect
     ld a, [wMenuSelected]
     ld l, a
     ld h, 0
@@ -282,11 +284,13 @@ ShowMenu:
     ld a, b
     and a, PAD_SELECT
     jr z, .loop
+    call SoundSelect
     call ShowTrace
     jp ShowMenu
 
 .storeSel
     ld [wMenuNewSel], a
+    call SoundSelect
 
     ld a, [wMenuSelected]
     ld b, a
@@ -343,6 +347,7 @@ RunAdapterSessionTest:
 
     call MagbEndSession ; best-effort -- result discarded, see comment above
 
+    call SoundSuccess
     ld hl, sPass
     ld de, RESULT_ADDR
     call PrintString
@@ -350,6 +355,7 @@ RunAdapterSessionTest:
 
 .fail
     push af
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -560,6 +566,7 @@ RunReadConfigTest:
 
 .fail
     push af
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -836,11 +843,11 @@ RunIspPasswordEdit:
 ; same charset as gbdk's kTextCharset, now that this font actually has
 ; lowercase tiles), LEFT/RIGHT moves the cursor (wrapping), A saves
 ; (trailing spaces trimmed) and returns, B leaves the buffer unchanged
-; and returns. The RGBDS-side equivalent of gbdk's ui_edit_text(), with
-; one real difference: no held-direction auto-repeat (gbdk's
-; wait_key_repeat()) -- one press moves the cursor/cycles one step.
-; Simpler edge-triggered polling only, same as everywhere else in this
-; ROM's UI.
+; and returns. The RGBDS-side equivalent of gbdk's ui_edit_text(),
+; including held-direction auto-repeat (joypad.asm's ReadJoypadRepeat,
+; the RGBDS-side equivalent of gbdk's wait_key_repeat()) -- holding
+; UP/DOWN/LEFT/RIGHT cycles/moves faster than one press per step, same
+; timing as gbdk (REPEAT_DELAY/REPEAT_INTERVAL).
 ;
 ; Input: HL = buffer (NUL-terminated on entry, may be empty), B = buffer
 ;        capacity including the NUL (capped at EDIT_TEXT_MAX_LEN+1),
@@ -896,13 +903,14 @@ EditText:
     ld [wEditCursor], a ; cursor = 0
 
     call DrawEditScreen
+    call ReadJoypadRepeatReset
 
 .loop
-    call WaitVBlank
-    call ReadJoypadPressed
+    call ReadJoypadRepeat
     ld b, a
-    or a, a
-    jr z, .loop
+    push bc ; SoundSelect clobbers everything -- b holds this frame's event(s)
+    call SoundSelect
+    pop bc
 
     ld a, b
     and a, PAD_LEFT
@@ -1385,7 +1393,7 @@ RunP2pCaller:
 
     call P2pRecvFrame
     or a, a
-    jr nz, .failNoSession
+    jp nz, .failNoSession
     ld a, [wMatsRecvLen]
     cp a, 4
     jr nz, .badFrameNoSession
@@ -1405,7 +1413,7 @@ RunP2pCaller:
 
     call P2pRecvFrame
     or a, a
-    jr nz, .failNoSession
+    jp nz, .failNoSession
     ld a, [wMatsRecvLen]
     cp a, 8
     jr nz, .badFrameNoSession
@@ -1425,7 +1433,7 @@ RunP2pCaller:
 
     call P2pRecvFrame
     or a, a
-    jr nz, .failNoSession
+    jp nz, .failNoSession
     ld a, [wMatsRecvLen]
     cp a, sHelloWorldEnd - sHelloWorld
     jr nz, .badFrameNoSession
@@ -1441,6 +1449,7 @@ RunP2pCaller:
     ld hl, sHelloWorldOk
     ld de, HTTP_ADDR
     call PrintString
+    call SoundSuccess
     ld hl, sPass
     ld de, RESULT_ADDR
     call PrintString
@@ -1457,6 +1466,7 @@ RunP2pCaller:
 .fail
     push af
 .showP2pFail
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -1517,7 +1527,7 @@ RunP2pListener:
 
     call P2pRecvFrame
     or a, a
-    jr nz, .failNoSession
+    jp nz, .failNoSession
     ld a, [wMatsRecvLen]
     cp a, 4
     jr nz, .badFrameNoSession
@@ -1560,6 +1570,7 @@ RunP2pListener:
     ld hl, sHelloWorldOk
     ld de, HTTP_ADDR
     call PrintString
+    call SoundSuccess
     ld hl, sPass
     ld de, RESULT_ADDR
     call PrintString
@@ -1576,6 +1587,7 @@ RunP2pListener:
 .fail
     push af
 .showP2pFail
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -1686,13 +1698,14 @@ EditNumber:
     ld [wNumCursor], a
 
     call DrawEditNumberScreen
+    call ReadJoypadRepeatReset
 
 .loop
-    call WaitVBlank
-    call ReadJoypadPressed
+    call ReadJoypadRepeat
     ld b, a
-    or a, a
-    jr z, .loop
+    push bc ; SoundSelect clobbers everything -- b holds this frame's event(s)
+    call SoundSelect
+    pop bc
 
     ld a, b
     and a, PAD_LEFT
@@ -2271,6 +2284,7 @@ RunIspHttpCore:
     call SetCommand
     call MagbEndSession
 
+    call SoundSuccess
     ld hl, sPass
     ld de, RESULT_ADDR
     call PrintString
@@ -2281,6 +2295,7 @@ RunIspHttpCore:
     ; PrintString (called next, for the "RESULT: FAIL" line) clobbers A.
     push af
 
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -2538,12 +2553,14 @@ RunNewsConfigTest:
     call SetCommand
     call MagbEndSession
 
+    call SoundSuccess
     ld hl, sPass
     ld de, RESULT_ADDR
     call PrintString
     jp WaitForBackButton
 
 .noPassword
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -2556,6 +2573,7 @@ RunNewsConfigTest:
     cp a, MAGB_ERR_ISP
     jr nz, .showFail
     push af
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -2570,6 +2588,7 @@ RunNewsConfigTest:
 
 .showFail
     push af
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -2793,12 +2812,14 @@ RunNewsArticleTest:
     call SetCommand
     call MagbEndSession
 
+    call SoundSuccess
     ld hl, sPass
     ld de, RESULT_ADDR
     call PrintString
     jp WaitForBackButton
 
 .noPassword
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -2817,6 +2838,7 @@ RunNewsArticleTest:
     cp a, MAGB_ERR_ISP
     jr nz, .protoFail
     push af
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -2833,6 +2855,7 @@ RunNewsArticleTest:
     jp WaitForBackButton
 .protoFail
     push af
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -2845,6 +2868,7 @@ RunNewsArticleTest:
 
 .showFail
     push af
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3175,12 +3199,14 @@ RunEmailSendTest:
     ld hl, sSentOk
     ld de, ERROR_ADDR
     call PrintString
+    call SoundSuccess
     ld hl, sPass
     ld de, RESULT_ADDR
     call PrintString
     jp WaitForBackButton
 
 .noEmailCfg
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3191,6 +3217,7 @@ RunEmailSendTest:
 
 .showNoGreeting
     call MagbTcpClose
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3218,6 +3245,7 @@ RunEmailSendTest:
     cp a, MAGB_ERR_ISP
     jr nz, .showEmailProtoFail
     call MagbTcpClose
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3228,6 +3256,7 @@ RunEmailSendTest:
 .showEmailProtoFail
     push af
     call MagbTcpClose
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3240,6 +3269,7 @@ RunEmailSendTest:
 .showTransportFailClosed
     push af
     call MagbTcpClose
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3249,6 +3279,7 @@ RunEmailSendTest:
 
 .showFail
     push af
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3895,12 +3926,14 @@ RunEmailRecvTest:
 
     call ShowPop3ResultLine
 
+    call SoundSuccess
     ld hl, sPass
     ld de, RESULT_ADDR
     call PrintString
     jp WaitForBackButton
 
 .noPassword
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3910,6 +3943,7 @@ RunEmailRecvTest:
     jp WaitForBackButton
 
 .noEmailCfg
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3920,6 +3954,7 @@ RunEmailRecvTest:
 
 .showNoPopGreeting
     call MagbTcpClose
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3941,6 +3976,7 @@ RunEmailRecvTest:
     cp a, MAGB_ERR_ISP
     jr nz, .showEmailProtoFail
     call MagbTcpClose
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3951,6 +3987,7 @@ RunEmailRecvTest:
 .showEmailProtoFail
     push af
     call MagbTcpClose
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3962,6 +3999,7 @@ RunEmailRecvTest:
 .showTransportFailClosed
     push af
     call MagbTcpClose
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -3971,6 +4009,7 @@ RunEmailRecvTest:
 
 .showFail
     push af
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -4125,28 +4164,22 @@ RawTcpPutChar:
     call ComputeRawTcpAddr
     pop af
     sub a, $20 ; ASCII -> tile index, matches LoadFont's mapping (tile 0 = ' ')
-    ; The tilemap write below must happen with the LCD off, same as every
-    ; other VRAM write in this ROM (PrintString/ClearTextScreen/LoadFont
-    ; all do this) -- Raw TCP is the one screen that writes live, one
-    ; byte at a time, outside any of those functions' own LCD-off/on
-    ; bracketing, so without this it was writing directly into VRAM
-    ; whenever a byte happened to arrive, including while the PPU was
-    ; actively fetching tiles (mode 3) -- a write that lands then is
-    ; simply ignored, corrupting/losing exactly the character being
-    ; written. Confirmed as the cause of a real report ("some letters,
-    ; like O, don't show up") rather than a font-data bug: PrintString's
-    ; own LCD-off writes never show this, and nothing about a specific
-    ; character (as opposed to *whichever byte's write happened to race
-    ; the PPU*) would explain it.
+    ; The tilemap write below waits for VBlank first, same as
+    ; text.asm's PrintString -- Raw TCP is the one screen that writes
+    ; live, one byte at a time, so without this it was writing directly
+    ; into VRAM whenever a byte happened to arrive, including while the
+    ; PPU was actively fetching tiles (mode 3) -- a write that lands then
+    ; is simply ignored, corrupting/losing exactly the character being
+    ; written. A single byte trivially fits in one VBlank window with
+    ; room to spare, so unlike a byte-by-byte "wait for a safe PPU mode
+    ; right before this one write" approach (tried first, but see
+    ; PrintString's comment for the real race that has), there's no
+    ; meaningful risk of the mode-3 window beginning before this actual
+    ; write executes.
     push af
-    push hl
-    xor a, a
-    ldh [rLCDC], a
-    pop hl
+    call WaitVBlank
     pop af
     ld [hl], a
-    ld a, LCDC_ON | LCDC_BG_ON | LCDC_BG_TILEDATA
-    ldh [rLCDC], a
     jp RawTcpAdvance
 
 RunRawTcpTest:
@@ -4283,6 +4316,7 @@ RunRawTcpTest:
 
 .showFail
     push af
+    call SoundError
     ld hl, sFail
     ld de, RESULT_ADDR
     call PrintString
@@ -4400,6 +4434,7 @@ ShowIspSubMenu:
     ld a, b
     and a, PAD_A
     jr z, .checkB
+    call SoundSelect
     ld a, [wIspSubMenuSelected]
     ret
 
@@ -4407,11 +4442,13 @@ ShowIspSubMenu:
     ld a, b
     and a, PAD_B
     jr z, .loop
+    call SoundSelect
     ld a, ISP_SUBMENU_COUNT
     ret
 
 .storeSel
     ld [wIspSubMenuNewSel], a
+    call SoundSelect
 
     ld a, [wIspSubMenuSelected]
     ld b, a
@@ -4482,7 +4519,24 @@ MenuHandlers:
     dw RunP2pListener
 
 sMenuTitle1: db "MOBILE ADAPTER GB", 0
-sMenuTitle2: db "TESTSUITE", 0
+
+; Identifies exactly which build is running, so a stale ROM/process
+; can't be mistaken for a fresh one -- the RGBDS-side equivalent of
+; gbdk's ui.c BUILD_VERSION_STR/__TIME__ convention (same rationale,
+; same env var name, see that file's own comment). CI overrides
+; BUILD_VERSION_STR to the short commit hash via
+; `-D BUILD_VERSION_STR=<hash>` (see the Makefile's RGBASMFLAGS_EXTRA
+; and .github/workflows/build-release.yml); a local build falls back to
+; __TIME__ (the assembly time), which -- unlike BUILD_VERSION_STR from
+; `-D`, a bare unquoted token -- already carries its own quotes as part
+; of its string value, so it's concatenated as a separate db argument
+; here rather than interpolated into the string literal above it (that
+; would print the literal quote characters).
+IF DEF(BUILD_VERSION_STR)
+sMenuTitle2: db "TESTSUITE {BUILD_VERSION_STR}", 0
+ELSE
+sMenuTitle2: db "TESTSUITE ", __TIME__, 0
+ENDC
 sMenuFooter: db "A:RUN SEL:TRACE", 0
 
 sCursorOn:  db ">", 0
