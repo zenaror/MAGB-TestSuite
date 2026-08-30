@@ -11,7 +11,7 @@
 ; not a copied/embedded font, and not derived from any Nintendo/Pokemon
 ; asset (see the repo-root CLAUDE.md's Copyright / Clean-Room
 ; Considerations section; this also means it is deliberately NOT based
-; on gbdk/references/pokecrystal-mobile-eng's font.png, which is
+; on pokecrystal-mobile-eng's font.png, which is
 ; extracted from the real Pokemon Crystal ROM and carries exactly the
 ; asset-copyright risk that section warns about).
 ;

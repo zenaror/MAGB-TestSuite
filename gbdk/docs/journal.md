@@ -105,6 +105,29 @@ jogava fora o resto — o que passava despercebido até precisarmos ler
 várias linhas seguidas (para o recurso de apagar o e-mail de teste
 automaticamente após o recebimento funcionar).
 
+## E-mail: ponto final que engana o servidor SMTP do REON
+
+Na versão em RGBDS, um teste real contra o `libmobile-bgb` revelou um
+bug do lado do servidor de teste do REON: ele decide que a mensagem
+acabou (fim do `DATA`) checando se **cada linha, isoladamente**, termina
+em ponto final seguido de quebra de linha — não se a linha é *só* um
+ponto, como o SMTP de verdade exige. A mensagem de teste deste projeto
+terminava a frase do corpo com um ponto final normal, e o servidor
+achava que aquela já era a linha de encerramento, uma linha antes da
+hora — o resto virava lixo, incluindo o ponto de encerramento de
+verdade, que o servidor então tentava rodar como se fosse um comando
+digitado (dando `500 command not recognized`).
+
+Olhando o código desta versão em GBDK depois, achamos a mesma frase
+exata, com o mesmo ponto final no mesmo lugar — ou seja, o mesmo bug
+estava latente aqui também, só que nunca tinha sido pego num teste real
+contra o servidor de e-mail de verdade. Corrigido preventivamente, sem
+esperar aparecer: tiramos o ponto final da frase de teste, do mesmo
+jeito que na versão em RGBDS. Testado de verdade contra o
+`libmobile-bgb` logo em seguida (2026-08-30): `250 OK` limpo, sem o
+`500 command not recognized` — confirma que a correção funciona aqui
+também.
+
 ## Robustez geral e ajustes de usabilidade
 
 Ao longo das versões também fomos ajustando: senha do ISP limitada a 8

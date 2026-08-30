@@ -97,8 +97,8 @@ either, and it states explicitly which parts are GBDK-specific.
 .
 ├── CLAUDE.md          project brief and protocol references (both implementations)
 ├── LICENSE
-├── config.bin         real captured Mobile Adapter config (gitignored, see gbdk/docs/testing.md)
-├── emulador/           shared local emulator working dir, e.g. a BGB install (gitignored)
+├── config.bin         real captured Mobile Adapter config, provisioned locally (see gbdk/docs/testing.md)
+├── emulador/           shared local emulator working dir, e.g. a BGB install
 ├── gbdk/               C / GBDK-2020 implementation — see gbdk/README.md
 └── rgbds/              SM83 assembly / RGBDS implementation — see rgbds/README.md
 ```
