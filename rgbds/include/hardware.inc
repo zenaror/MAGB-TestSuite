@@ -41,6 +41,23 @@ DEF LCDC_BG_TILEDATA EQU %00010000
 DEF rSTAT EQU $FF41
 DEF STATF_BUSY EQU %00000010 ; STAT bit 1: set while BCPS/OCPS writes would be unsafe outside VBlank/HBlank
 
+; ---- APU (channel 1 square wave only -- menu/result feedback sounds) -----
+DEF rNR10 EQU $FF10 ; channel 1 pitch sweep
+DEF rNR11 EQU $FF11 ; channel 1 duty/length
+DEF rNR12 EQU $FF12 ; channel 1 volume envelope
+DEF rNR13 EQU $FF13 ; channel 1 period low byte
+DEF rNR14 EQU $FF14 ; channel 1 period high bits + control
+DEF rNR50 EQU $FF24 ; master volume/VIN panning
+DEF rNR51 EQU $FF25 ; per-channel left/right panning
+DEF rNR52 EQU $FF26 ; master audio enable / channel status
+
+DEF AUDENA_ON       EQU %10000000 ; NR52 bit 7: master audio enable
+DEF AUDTERM_1_LEFT  EQU %00010000 ; NR51 bit 4: channel 1 -> left speaker
+DEF AUDTERM_1_RIGHT EQU %00000001 ; NR51 bit 0: channel 1 -> right speaker
+DEF AUDVOL_MAX      EQU %01110111 ; NR50: max volume both speakers (7/7), no VIN
+DEF AUDHIGH_RESTART EQU %10000000 ; NR14 bit 7: trigger/restart the channel
+DEF DUTY_50         EQU %10000000 ; NR11 bits 7-6: 50% duty cycle
+
 ; ---- CGB background color palette (BCPS/BCPD) -----------------------------
 DEF rBCPS EQU $FF68
 DEF BCPS_AUTO_INCREMENT EQU %10000000
