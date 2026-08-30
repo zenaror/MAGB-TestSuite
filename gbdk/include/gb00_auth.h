@@ -9,10 +9,10 @@
  *
  * The algorithm was reverse-engineered by SimonTime (credited in
  * REONTeam/reon's own source) and is documented in prose in
- * references/reon/web/htdocs/cgb/upload.php's header comment; this
+ * REON's web/htdocs/cgb/upload.php header comment; this
  * implementation was derived from and round-trip-tested (on the host,
  * in Python) against REON's actual PHP decode function
- * (references/reon/web/cgb/auth.php: decodeAuthorization()) --
+ * (web/cgb/auth.php: decodeAuthorization()) --
  * including confirming that the FF-padding for the login ID goes on
  * the LEFT (login right-aligned within its 20-byte field), which the
  * upload.php prose comment does not state correctly. See

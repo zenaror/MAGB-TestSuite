@@ -15,3 +15,8 @@ Thumbs.db
 # host-test fixture and as the ROM's live ISP identity source. Not
 # provided -- see README.md/docs/testing.md for provisioning it.
 config.bin
+
+# Shallow clones of external reference repos (libmobile, REON, etc. --
+# see gbdk/docs/protocol-notes.md) used as research material by both
+# implementations. Not part of this repository.
+/references
