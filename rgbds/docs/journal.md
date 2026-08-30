@@ -124,6 +124,72 @@ irreconhecível. Bastou fechar o topo das três pernas com uma barra só,
 do mesmo jeito que o "n" (que sempre funcionou bem) já fazia com as
 dele.
 
+## Um bug de verdade do lado do servidor, não do ROM
+
+Testando o envio de e-mail (SMTP) de verdade, o `libmobile-bgb` mostrou
+um `250 OK` seguido de um estranho `500 command not recognized`.
+Comparando bytes exatos com o código-fonte real do servidor de teste do
+REON, achamos a causa: o servidor decide que a mensagem terminou
+olhando se **cada linha, isoladamente**, termina em ponto final -- não
+se a linha inteira é só um ponto, que é a regra real do protocolo. A
+frase de teste deste ROM terminava com um ponto final normal de frase,
+e o servidor cortou a mensagem uma linha antes da hora por causa disso.
+Não era bug daqui -- a correção do nosso lado foi só tirar aquele ponto
+final da frase de teste; a correção de verdade (comparar a linha inteira
+em vez do sufixo) foi reportada para o próprio projeto do REON.
+Confirmado depois, com a correção aplicada dos dois lados, que o envio
+funciona limpo (`250 OK`) tanto aqui quanto na versão em GBDK -- que
+tinha exatamente a mesma frase de teste, com o mesmo ponto final, nunca
+testada até então contra um servidor real; ficou corrigida de graça
+junto.
+
+## Polimento depois de usar bastante: tela piscando, sem som, sem saber qual build
+
+Depois de um bom tempo de uso real, três coisas incomodavam:
+
+- **A tela piscava a cada tecla, a cada item de menu, a cada byte
+  recebido no Raw TCP.** A causa: toda escrita na tela desligava o LCD
+  inteiro, escrevia, e ligava de novo -- forma mais simples de nunca
+  corromper a memória de vídeo, mas visível como um flash cada vez que
+  acontecia, e isso rodava o tempo todo. A primeira tentativa de
+  correção trocou essa abordagem inteira por uma escrita que checa o
+  modo do próprio hardware de vídeo antes de cada byte (sem nunca
+  desligar a tela) -- o flicker realmente sumiu, mas um teste real logo
+  depois mostrou um efeito colateral pior: letras sumindo aleatoriamente
+  do texto (ex.: "MOBILE ADAPTER GB" virando "M BIL  ADAPTER GB"), e
+  lixo gráfico ao entrar/sair de submenu. A checagem tinha uma corrida
+  real -- o intervalo "confirmei que é seguro" até "escrevi de fato" é
+  curto o bastante pra às vezes cair bem na hora que o modo perigoso do
+  vídeo começa, descartando aquele byte em silêncio. A correção
+  definitiva separou por tamanho/frequência: escritas pequenas (uma
+  linha de menu, um caractere do Raw TCP) esperam o próximo VBlank uma
+  vez só e escrevem tudo de uma vez, já que essa janela é enorme
+  perto do que qualquer uma delas precisa escrever; as duas
+  transferências grandes (a fonte inteira, a tela inteira -- 1024 bytes
+  cada, raras: só no boot ou ao trocar de tela) voltaram a desligar o
+  LCD por completo, sem corrida nenhuma, e sem causar o flicker
+  constante que motivou tudo isso (rodam raro demais pra incomodar).
+  Testado de novo, bem mais a fundo dessa vez (navegação verificada
+  lendo a posição do cursor direto da memória, não só olhando a tela):
+  30 redesenhos de menu, 25 entradas/saídas completas do submenu de
+  ISP/HTTP e 60 trocas de caractere no editor de senha, todos batendo
+  exatamente com o esperado.
+- **Não tinha nenhum som**, diferente da versão em GBDK (um bipe curto
+  ao navegar no menu, um som de sucesso, um de erro). Portado do zero
+  pro assembly, ligado exatamente nos mesmos pontos que a versão em
+  GBDK já usava.
+- **Não dava pra saber qual build estava rodando na tela**, coisa que a
+  versão em GBDK já mostrava (hash do commit em builds do CI, hora da
+  compilação em builds locais) -- importante justamente para não
+  confundir uma versão antiga com uma nova durante teste manual. Levado
+  pro assembly do mesmo jeito, incluindo o CI.
+
+Enquanto mexia nos editores de texto/número para adicionar o som, uma
+lacuna conhecida (documentada desde o início: "segurar o botão pra
+mover mais rápido" não existia aqui, diferente do GBDK) foi fechada
+junto -- segurar uma direção agora acelera depois de meio segundo,
+igual ao GBDK.
+
 ## O que falta
 
 Com o Raw TCP confirmado também, só falta o P2P (Caller/Listener) —

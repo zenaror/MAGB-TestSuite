@@ -42,6 +42,7 @@ SRCS := \
     src/protocol/session.asm \
     src/protocol/config.asm \
     src/app/text.asm \
+    src/app/sound.asm \
     src/app/gb00_auth.asm \
     src/app/net_extra.asm
 
@@ -54,7 +55,12 @@ OBJS := $(patsubst src/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 # halt loop, a deliberate DMG-halt-bug guard) is kept as-is, no flag
 # needed. `-i` for `--include` was also removed in that same release;
 # use `-I` instead.
-RGBASMFLAGS := -I $(INCLUDE_DIR)/ -W all
+# RGBASMFLAGS_EXTRA lets a caller pass extra rgbasm defines, e.g. the
+# build-identifying commit hash CI injects into the menu title (see
+# main.asm's sMenuTitle2 comment and .github/workflows/build-release.yml):
+#   make RGBASMFLAGS_EXTRA="-D BUILD_VERSION_STR=abc1234"
+RGBASMFLAGS_EXTRA ?=
+RGBASMFLAGS := -I $(INCLUDE_DIR)/ -W all $(RGBASMFLAGS_EXTRA)
 
 .PHONY: all clean toolchain-check
 
