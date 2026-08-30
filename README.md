@@ -1,4 +1,6 @@
-# Mobile Adapter GB TestSuite
+![Logo]](logo.png)
+
+---
 
 A **Game Boy Color homebrew diagnostic ROM** that speaks the real
 Nintendo **Mobile Adapter GB** (CGB-005 / Mobile System GB) protocol
