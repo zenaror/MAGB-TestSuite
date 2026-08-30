@@ -124,10 +124,16 @@ not implemented.
   trimmed), B cancels without saving. Charset is gbdk's exact
   space+lowercase+uppercase+digits (`sTextCharset`) -- initially shipped
   as space+uppercase+digits only, before the font had lowercase; see
-  "Hard-won bugs". Only remaining real difference from gbdk: no
-  held-direction auto-repeat (gbdk's `wait_key_repeat()`) -- one press
-  moves/cycles one step. Verified by editing a value, saving, and
-  reading `wIspPassword`
+  "Hard-won bugs". Held-direction auto-repeat (`joypad.asm`'s
+  `ReadJoypadRepeat`/`ReadJoypadRepeatReset`, the RGBDS-side equivalent
+  of gbdk's `wait_key_repeat()`/`wait_key_repeat_reset()`, same
+  `REPEAT_DELAY`(18)/`REPEAT_INTERVAL`(6) timing) now matches gbdk here
+  and in `EditNumber` -- holding UP/DOWN/LEFT/RIGHT cycles/moves faster
+  than one press per step; A/B still only fire on a fresh press, same
+  as gbdk. Verified via PyBoy: holding UP continuously advanced the
+  charset through several positions (not just one), confirming repeat
+  actually fires rather than a single edge. Verified by editing a
+  value, saving, and reading `wIspPassword`
   back from WRAM directly (`"B"`, trailing spaces correctly trimmed),
   and separately that a cancelled edit leaves the previously-saved
   value untouched. Nothing on this side reads the password yet -- no
@@ -572,6 +578,61 @@ via PyBoy: all 7 labels render correctly, up/down/A/B navigation works,
 B returns to the main menu, and each entry reaches its own real test
 flow.
 
+### UI feedback: sound and a build indicator
+
+Two small parity gaps against `gbdk/` closed in the same milestone
+(2026-08-30), both reported by the project owner after extended real
+use:
+
+- **Sound** (`src/app/sound.asm`, new file): `SoundInit`/`SoundSelect`/
+  `SoundError`/`SoundSuccess`, a straight SM83 port of gbdk's
+  `sound.c`/`sound.h` -- same channel-1-square-wave-only approach (no
+  tracker dependency), same tone/envelope/duration values for each of
+  the three sounds, same call sites: `SoundInit` once at boot (after
+  `LoadFont`), `SoundSelect` on every main-menu/submenu navigation event
+  (UP/DOWN/A/SELECT/B) and on every `EditText`/`EditNumber` key event,
+  `SoundSuccess`/`SoundError` right before every `RESULT: PASS`/
+  `RESULT: FAIL` line -- inserted at all 8 `sPass` and 26 `sFail` call
+  sites (`main.asm`), which turned out to already share one identical
+  3-line pattern each, letting a single project-wide find/replace apply
+  correctly everywhere in one pass rather than 34 individual edits.
+  Verified via PyBoy: `NR50`/`NR51` read back exactly `AUDVOL_MAX`/
+  `AUDTERM_1_LEFT|AUDTERM_1_RIGHT` after boot; after a menu keypress,
+  `NR13`/`NR14` read back exactly the values real GBC sound hardware is
+  documented to expose for those (mostly write-only) registers --
+  `NR13` always `$FF` (fully write-only) and `NR14` only its bit 6
+  (length-enable) readable, which read back `0` as expected from what
+  was written -- confirming the writes landed correctly rather than
+  literally reading back the programmed frequency (not the way this
+  particular hardware works). Menu navigation itself confirmed
+  unaffected by the added calls (PyBoy: cursor still moves/redraws
+  correctly across several button presses in a row).
+- **Build indicator** (`main.asm`'s `sMenuTitle2`): the menu's second
+  title row now shows exactly which build is running, the RGBDS-side
+  equivalent of gbdk's `ui.c` `BUILD_VERSION_STR`/`__TIME__` convention
+  (same env var name, same rationale -- a stale ROM/process shouldn't
+  be mistaken for a fresh one during hardware/BGB testing). CI overrides
+  `BUILD_VERSION_STR` to the short commit hash via a new
+  `RGBASMFLAGS_EXTRA` Makefile variable (`-D BUILD_VERSION_STR=<hash>`,
+  wired into `.github/workflows/build-release.yml` alongside gbdk's
+  existing `CFLAGS_EXTRA` for the same value); a local build falls back
+  to `__TIME__` (RGBDS's own assembly-time macro, deprecated in favor of
+  `__ISO_8601_LOCAL__` but kept here since it's short enough to fit the
+  20-column title row next to `"TESTSUITE "`, unlike the full ISO
+  timestamp). One real RGBDS-specific wrinkle gbdk's C side never hits:
+  `-D BUILD_VERSION_STR=<hash>` on the rgbasm command line defines a
+  *bare* token (interpolates cleanly via `{BUILD_VERSION_STR}` inside a
+  string literal), but `__TIME__` itself expands to an *already-quoted*
+  string constant -- interpolating it the same way would print literal
+  quote characters onto the screen. Fixed by branching at assemble time
+  (`IF DEF(BUILD_VERSION_STR)`): the CI-defined case interpolates into
+  the string literal, the local-build fallback concatenates `__TIME__`
+  as its own `db` argument instead. Verified via PyBoy in both modes:
+  a plain `make` build shows `"TESTSUITE 12:16:04"` (real assembly
+  time); `make RGBASMFLAGS_EXTRA="-D BUILD_VERSION_STR=abc1234"` shows
+  `"TESTSUITE abc1234"`, both rendering correctly with no quote
+  characters or overflow past the 20-column row.
+
 ## Confirmed working
 
 - **Begin Session / End Session** (2026-08-28): a full PASS reproduced
@@ -643,6 +704,85 @@ flow.
 
 ## Hard-won bugs (worth reading before touching this code again)
 
+- **Every screen redraw visibly flashed the whole display.** Reported
+  (2026-08-30) after extended real use across the menu, the ISP
+  PASSWORD/number editors, and Raw TCP: the screen "piscava" (flickered)
+  on essentially every interaction. Root cause: `text.asm`'s
+  `PrintString`/`ClearTextScreen`/`LoadFont`/`PrintAsciiField` and
+  `main.asm`'s `RawTcpPutChar` all turned the entire LCD off, wrote, then
+  turned it back on -- correct (VRAM genuinely isn't safely writable
+  with the LCD on outside HBlank/VBlank) but visible to the player every
+  single time, since blanking the whole screen even briefly is
+  perceptible, and these functions run on essentially every keystroke,
+  every incoming Raw TCP byte, and every menu redraw. Not the same bug
+  as the earlier "`LoadFont` racing the PPU"/"turning the LCD off
+  outside VBlank" entries below (those were about *correctness* --
+  corrupted output or a stuck PPU state from timing the LCDC write
+  wrong); this one was about the *correct*, working LCD-off/on approach
+  itself being visibly disruptive by design, no timing bug involved.
+  First attempted fix (later reverted -- see next entry) replaced the
+  whole mechanism with a `WaitVramSafe` primitive that polled `STAT`'s
+  mode bits and wrote as soon as the PPU wasn't in mode 3, instead of
+  disabling the LCD. That part worked (no more flicker), but introduced
+  a new, worse bug -- see the next entry for the full story and the
+  actual fix that stuck.
+- **The flicker fix above (`WaitVramSafe`, polling `STAT` before every
+  byte instead of disabling the LCD) had a real race, and dropped
+  scattered characters on a real screen.** Reported (2026-08-30) via
+  real screenshots taken right after the flicker fix above: letters
+  randomly missing from otherwise-correct, static menu text -- "MOBILE
+  ADAPTER GB" rendered as "M BIL  ADAPTER GB" (the 'O' and one 'E'
+  simply blank), "READ CONFIG" as "R AD CONFIG" (the 'E' blank), and
+  similar single-letter gaps scattered across the ISP/HTTP submenu
+  labels -- plus visibly stale leftover content (a stray letter from a
+  *previous* screen) showing through after leaving and re-entering the
+  submenu a few times. Two tells ruled out a font-data bug immediately:
+  the *same* letter rendered correctly elsewhere on the *same* screen
+  (e.g. the 'O' in "CONFIG" was fine even though the 'O' in "MOBILE"
+  wasn't), and the dropped positions always came out as a *blank* tile,
+  never a *wrong* one -- exactly what "this particular write never
+  landed, so whatever `ClearTextScreen` already put there (zero/blank)
+  is still showing" looks like, not what a corrupted glyph bitmap would
+  produce. Root cause: `WaitVramSafe`'s "check STAT, then write" isn't
+  atomic -- the checked-safe window (any mode except 3) can be as short
+  as a handful of CPU cycles in the worst case (right at the tail end of
+  HBlank, just before the next scanline's mode 2 begins), and the
+  `ret`/`pop af`/`ld [de],a` sequence between the check passing and the
+  actual write executing was sometimes enough cycles for mode 3 to have
+  already started by the time the write landed -- silently dropping
+  that one byte, exactly as if the LCD had still been off-limits. Over
+  a handful of characters per short string this is rare enough to often
+  go unnoticed, but a full menu redraw (~100+ tile writes across several
+  `PrintString` calls) or the two large 1024-byte bulk copies
+  (`ClearTextScreen`, `LoadFont`) hit that narrow window often enough to
+  be visible in practice -- and a byte dropped mid-`ClearTextScreen` is
+  exactly what leaves old content peeking through on the next screen.
+  Fixed by splitting the fix by call frequency and size instead of using
+  one mechanism everywhere: `PrintString`/`PrintAsciiField`/
+  `RawTcpPutChar` (small, per-call writes -- at most a few dozen bytes,
+  the longest being a ~20-character menu label) now wait for VBlank
+  *once* per call and then write everything with no further checking,
+  relying on VBlank's ~4560-dot window being *orders of magnitude*
+  larger than what any of these ever need to write in one call, so there
+  is no realistic way for a mode-3 window to begin before the call
+  finishes; `ClearTextScreen`/`LoadFont` (the two large 1024-byte bulk
+  copies, each run rarely -- once per screen transition or once at boot,
+  never per keystroke) went back to the original wait-for-VBlank-then-
+  disable-the-LCD-for-the-whole-transfer approach, which has no race at
+  all since the LCD is fully off for the duration -- and since these
+  don't run on every interaction, the one resulting flash isn't the
+  "constant flicker" this whole investigation started from.
+  `WaitVramSafe` and the `STATF_MODE_MASK`/`STATF_MODE_XFER` constants
+  it needed are now unused and were removed rather than left as dead
+  code. Verified via PyBoy with WRAM-state-verified navigation (reading
+  `wMenuSelected`/`wIspSubMenuSelected` directly rather than guessing
+  cursor position from button-press timing, after an earlier looser test
+  gave false failures from its *own* navigation racing the screen's
+  redraw): 30 consecutive main-menu DOWN-press redraws with zero
+  corruption, 25 full ISP/HTTP submenu enter+leave cycles (50 checks)
+  with zero corruption or stale content, and 60 consecutive ISP PASSWORD
+  charset cycles with the rendered screen character matching the actual
+  `wEditWork` buffer byte-for-byte on every single step.
 - **Lowercase 'm' rendered as three disconnected vertical strokes.**
   Reported (2026-08-30) via a real screenshot of the ISP PASSWORD
   editor: typing "mae" showed an unrecognizable glyph (looked like

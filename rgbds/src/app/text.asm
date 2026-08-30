@@ -46,21 +46,17 @@ INCLUDE "hardware.inc"
 SECTION "Text Code", ROM0
 
 ; Copies the 64-tile font into VRAM tile block 0 ($8000-$83FF). Turns
-; the LCD off for the duration itself (same approach as PrintString/
-; ClearTextScreen below) -- VRAM isn't safely writable with the LCD on
-; outside HBlank/VBlank, and this copies more than fits reliably in
-; either window. An earlier version relied on the caller (main.asm's
-; InitDisplayBlank) leaving the LCD off, but InitDisplayBlank turns it
-; back on before returning, so most of this copy raced the PPU and had
-; its writes silently dropped mid-transfer -- confirmed by seeing
-; partial/broken-looking glyphs in BGB (correct tile *numbers*, corrupt
-; tile *data*) instead of a hang or a blank screen.
+; the LCD off for the whole 1024-byte transfer -- this is a large bulk
+; copy (way more than fits in one VBlank window, see PrintString's
+; comment below for why that matters), called exactly once at boot, so
+; the one resulting flash is never visible to the player as "flicker"
+; the way a per-keystroke redraw would be.
 ;
-; Waits for VBlank before turning the LCD off, same reason as
-; PrintString below -- turning LCDC off is itself only well-defined at
-; the start of VBlank; doing it from an arbitrary point mid-scanline is
-; the same class of hazard as writing VRAM with the LCD on, just on the
-; control register instead of the data.
+; Waits for VBlank before turning the LCD off -- turning LCDC off is
+; itself only well-defined at the start of VBlank; doing it from an
+; arbitrary point mid-scanline leaves the PPU's internal state
+; corrupted for several frames afterward (found the hard way -- see
+; docs/status.md's "Hard-won bugs").
 ; Clobbers: A, BC, HL, DE
 LoadFont::
     call WaitVBlank
@@ -84,30 +80,35 @@ LoadFont::
     ret
 
 ; Prints a null-terminated ASCII string (chars $20-$5F only) into the BG
-; tilemap starting at a given address. Turns the LCD off for the
-; duration (simplest way to make this safe to call from anywhere,
-; regardless of how long the string is or what PPU mode happens to be
-; active at the time -- diagnostic code, not a hot path) and back on
-; when done.
+; tilemap starting at a given address. Waits for VBlank once, then
+; writes the whole string without ever touching LCDC.
 ;
-; Waits for VBlank first -- confirmed the hard way via the menu screen
-; (main.asm's DrawMenu), which calls this back-to-back ~14 times with no
-; delay between calls to redraw every item: without waiting here,
-; enough of those calls landed mid-scanline (LCD turned off outside
-; VBlank, undefined on real hardware) that the PPU's internal state got
-; thrown off badly enough to render a blank white screen for several
-; frames afterward -- not a hang (LCDC read back on afterward, VRAM
-; contents were even still correct), just a PPU timing hazard invisible
-; when this was only ever called a few, naturally-spaced-out times per
-; screen (every previous milestone's actual call pattern).
+; This used to instead poll STAT's PPU-mode bits before every single
+; byte and skip turning the LCD off entirely, on the theory that
+; "any mode except 3 is safe, so just wait for one of those right
+; before each write" -- that has a real race, though: the just-checked
+; safe window can be as short as a handful of CPU cycles (worst case,
+; right at the tail end of HBlank before the next scanline's mode 2
+; begins), and the few instructions between the check passing and the
+; actual `ld [de],a` executing were sometimes enough to land squarely in
+; mode 3 anyway, silently dropping that one byte. That showed up as
+; scattered single blank tiles across otherwise-correct real-screen text
+; (a letter here and there just missing, never a wrong letter) --
+; exactly what "the write was silently ignored, leaving whatever
+; ClearTextScreen had already zeroed there" looks like. Waiting for
+; VBlank once instead avoids the race entirely: VBlank's ~4560-dot
+; window (further off, not tighter, in CGB double-speed mode, since the
+; PPU's dot timing doesn't change but the CPU's cycles-per-dot doubles)
+; comfortably fits any string this ROM ever prints in one call (its
+; longest line is a menu label, well under 32 characters) with orders of
+; magnitude to spare, so there's no realistic way for a mode-3 window to
+; begin before this function is done writing.
 ;
 ; Input:  HL = string pointer (ROM), DE = tilemap destination address
 ;         (e.g. $9800 + row*32 + col)
 ; Clobbers: A, HL, DE
 PrintString::
-    call WaitVBlank ; clobbers only A -- HL/DE (this call's own inputs) survive
-    xor a, a
-    ldh [rLCDC], a
+    call WaitVBlank
 .loop
     ld a, [hl+]
     or a, a
@@ -117,12 +118,13 @@ PrintString::
     inc de
     jr .loop
 .done
-    ld a, LCDC_ON | LCDC_BG_ON | LCDC_BG_TILEDATA
-    ldh [rLCDC], a
     ret
 
-; Fills the entire 32x32 BG tilemap with tile 0 (space, blank). Same
-; LCD-off/on safety approach as PrintString.
+; Fills the entire 32x32 BG tilemap with tile 0 (space, blank). Turns
+; the LCD off for the whole 1024-byte transfer, same rationale as
+; LoadFont above (too large to fit in one VBlank window; called once per
+; screen transition, not per keystroke, so the one resulting flash isn't
+; the "flicker" this file's other functions had to stop causing).
 ;
 ; The zero-check runs *before* each write (see main.asm's FillMemory
 ; comment for why): an earlier version checked after writing and reused
@@ -131,7 +133,7 @@ PrintString::
 ; whatever pattern was already in VRAM.
 ; Clobbers: A, BC, HL
 ClearTextScreen::
-    call WaitVBlank ; see PrintString's comment for why
+    call WaitVBlank ; see LoadFont's comment for why
     xor a, a
     ldh [rLCDC], a
 
@@ -196,12 +198,14 @@ PrintHexByte::
 ; matching this font's actual coverage ($20-$7A, not gbdk's $20-$7E --
 ; this font has no punctuation/symbols past 'z').
 ;
+; Waits for VBlank once, then writes the whole field without touching
+; LCDC -- same reasoning as PrintString above (config fields are at
+; most a few dozen bytes, comfortably inside one VBlank window).
+;
 ; Input: HL = source bytes, B = length, DE = tilemap destination
 ; Clobbers: everything
 PrintAsciiField::
     call WaitVBlank
-    xor a, a
-    ldh [rLCDC], a
 .loop
     ld a, b
     or a, a
@@ -221,8 +225,6 @@ PrintAsciiField::
     dec b
     jr .loop
 .done
-    ld a, LCDC_ON | LCDC_BG_ON | LCDC_BG_TILEDATA
-    ldh [rLCDC], a
     ret
 
 ; Prints 4 bytes as a dotted-decimal quad (e.g. an IPv4 address),
