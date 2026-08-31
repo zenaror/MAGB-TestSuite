@@ -128,6 +128,46 @@ jeito que na versão em RGBDS. Testado de verdade contra o
 `500 command not recognized` — confirma que a correção funciona aqui
 também.
 
+## E-mail: mandava certo, mas o Mobile Trainer não conseguia abrir
+
+Reportando esse mesmo bug pro mantenedor do REON, ele questionou como a
+gente sabia o que era "comportamento correto" pro servidor, já que o
+teste automatizado deles não roda contra hardware real. Aproveitamos
+pra testar de verdade: enviar e receber e-mail usando o próprio Mobile
+Trainer (o utilitário oficial que acompanha o Mobile Adapter GB) — algo
+que nunca tínhamos feito, só testávamos com o nosso próprio ROM dos dois
+lados.
+
+O envio pelo Mobile Trainer funcionou limpo. Só que, ao tentar receber
+uma mensagem de teste enviada pelo *nosso* ROM, o Mobile Trainer não
+conseguia abri-la — mesmo ela chegando certinho pelo POP3 (o nosso
+próprio cliente de teste conseguia ler o mesmo e-mail sem problema). A
+diferença: as mensagens de verdade que o Mobile Trainer manda sempre
+levam um conjunto de cabeçalhos (`MIME-Version`, `From`, `To`,
+`Content-Type: text/plain; charset=iso-2022-jp`) — documentado desde o
+início no nosso próprio `docs/dandocs-magb.md`, seção "Mobile Trainer" /
+"Email", mas nunca comparado byte a byte contra o que o nosso teste
+realmente mandava, que só tinha `Subject:`. Confirmado injetando uma
+mensagem de teste sem esses cabeçalhos direto numa caixa de entrada real
+e tentando abrir no Mobile Trainer (falhou), depois repetindo com os
+cabeçalhos adicionados (funcionou) — sem precisar mexer em nenhum código
+ainda, só validar a hipótese primeiro.
+
+Corrigido: o teste de envio agora monta a mensagem com esses mesmos
+cabeçalhos, usando o e-mail real lido do adaptador tanto em `From:`
+quanto em `To:` (a mensagem sempre é endereçada pra si mesma). O texto
+maior estourou o limite de 32 KiB da ROM (sem mapper) por pouco — 14
+bytes. Em vez de cortar algo do próprio formato de e-mail recém
+validado, encurtamos "FAILED" para "FAIL" numa lista de mensagens de
+erro já existentes, de forma uniforme (todas ou nenhuma, pra não deixar
+duas mensagens parecidas discordando sobre qual palavra usar).
+
+A validação do formato em si (injetar direto na caixa de entrada, abrir
+no Mobile Trainer) confirma que os cabeçalhos certos resolvem o
+problema — mas ainda falta rodar o envio de verdade, com esse novo
+formato, através desta ROM contra o `libmobile-bgb` de novo (só o
+formato anterior, sem cabeçalho, tinha sido confirmado assim).
+
 ## Robustez geral e ajustes de usabilidade
 
 Ao longo das versões também fomos ajustando: senha do ISP limitada a 8
