@@ -3081,7 +3081,7 @@ sSmtpHeadersRest:
     db $0D, $0A, "Subject: MAGB TestSuite", $0D, $0A
     db "Content-Type: text/plain; charset=iso-2022-jp", $0D, $0A
     db $0D, $0A
-    db "Hello from the Mobile Adapter GB TestSuite ROM", $0D, $0A
+    db "Hello from the Mobile Adapter GB TestSuite ROM.", $0D, $0A
     db ".", $0D, $0A
 sSmtpHeadersRestEnd:
 
