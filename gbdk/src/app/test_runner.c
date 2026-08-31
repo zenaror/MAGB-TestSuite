@@ -1078,7 +1078,7 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
             "Subject: MAGB TestSuite\r\n"
             "Content-Type: text/plain; charset=iso-2022-jp\r\n"
             "\r\n"
-            "Hello from the Mobile Adapter GB TestSuite ROM\r\n"
+            "Hello from the Mobile Adapter GB TestSuite ROM.\r\n"
             ".\r\n",
             id.email, id.email);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "250", &r, &remote_closed)) {
