@@ -429,7 +429,21 @@ recognized payload.)
   <local-part-of-email>` / `PASS <same password as ISP login>` --
   confirmed by reading `pop3Connection.js`'s `PASS` handler, which
   checks against the identical `log_in_password` database column the
-  GB00/ISP-facing auth uses.
+  GB00/ISP-facing auth uses. The sent message itself carries
+  `MIME-Version`/`From`/`To`/`Content-Type: text/plain;
+  charset=iso-2022-jp` headers (both `From:` and `To:` set to the same
+  live `id.email`, since this test always mails itself) -- the shape
+  Mobile Trainer's real outgoing mail always uses (see "Mobile Trainer",
+  "Email" in `dandocs-magb.md`). A bare `"Subject: ...\r\n\r\nbody"`
+  message (this test's original shape) sends and round-trips fine over
+  raw SMTP/POP3, and REON itself doesn't reject it, but Mobile Trainer's
+  own inbox couldn't display a message received in that shape --
+  confirmed by injecting a header-less test message directly into a
+  real test mailbox and trying to open it in Mobile Trainer (failed),
+  then retrying with these headers added (opened correctly).
+  `charset=iso-2022-jp` is safe to declare even for this test's plain
+  ASCII body, since plain ASCII is a valid subset of ISO-2022-JP's
+  default/ASCII-mode state (no escape sequences needed).
 - `TEST_P2P_PHONE "127000000001"` — libmobile's own
   `mobile_parse_phoneaddr()` (`util.c`) parses any 12-digit
   `MAGB_CMD_DIAL` payload as 4 groups of 3 decimal digits → an IPv4

@@ -501,6 +501,36 @@ greeting `220` -> `HELO` -> `MAIL FROM:<email>` -> `RCPT TO:<email>` ->
 real address and an empty one, both exactly matching the expected byte
 sequence.
 
+The message body itself (`BuildSmtpBody`, new) carries
+`MIME-Version`/`From`/`To`/`Subject`/`Content-Type: text/plain;
+charset=iso-2022-jp` headers -- both `From:` and `To:` set to the same
+live `wIdentityEmail` (this test always mails itself) -- matching gbdk's
+identical fix and, before that, real Mobile Trainer messages
+(`dandocs-magb.md`, "Mobile Trainer", "Email"). A bare
+`"Subject: ...\r\n\r\nbody"` message (this test's original shape) sends
+and round-trips fine over raw SMTP/POP3, and REON itself doesn't reject
+it, but Mobile Trainer's own inbox couldn't display a message received
+in that shape -- confirmed by injecting a header-less test message
+directly into a real test mailbox and trying to open it in Mobile
+Trainer (failed), then retrying with these headers added (opened
+correctly), before touching any ROM code. `AppendSmtpBodyBytes`/
+`AppendSmtpBodyCstr` (the two small byte-append primitives
+`BuildSmtpBody` composes its five chunks through) verified via PyBoy,
+using a clean `hook_register`-based call-and-inspect rather than a raw
+mid-tick PC/SP overwrite (the latter, tried first, produced corrupted
+output partway through the first chunk -- almost certainly an artifact
+of yanking PC at an arbitrary, not-necessarily-instruction-aligned tick
+boundary rather than a real bug, since a hook-based call of the exact
+same code produced byte-perfect output on the first try): two live
+email addresses (24 and 6 characters) each produced the exact expected
+206/170-byte message, byte-for-byte. `EMAIL_LINE_BUF_SIZE` (backing
+`wEmailCmdBuf`, which now holds this larger built message instead of
+just a single MAIL FROM/RCPT TO/USER line) grew from 72 to `2 *
+MAGB_CONFIG_EMAIL_LEN + 160` (208), matching gbdk's identical sizing
+for the same buffer -- WRAM had comfortable headroom (321 free before
+this change) unlike gbdk's ROM, which needed a small unrelated trim
+(see gbdk's own journal entry) to fit the larger message text.
+
 `RunEmailRecvTest` (POP3, ISP PASSWORD *is* required -- REON's real
 `pop3Connection.js` checks `PASS` against the same `log_in_password`
 column GB00 auth uses) matches gbdk's `test_isp_email_recv()`: greeting
@@ -831,6 +861,20 @@ use:
   symbols, and lowercase are unchanged. **Confirmed on a real screen**
   (project owner, 2026-08-30): "MUITO melhor" -- substantially more
   legible than the old set.
+- **`(` rendered as a plain straight vertical line, with no curve at
+  all.** Reported (2026-08-31) via the ISP/HTTP submenu's "RAW TCP(NC)"
+  label showing up as something readable as "RAW TCPINC)" -- not a
+  redraw/corruption symptom this time (unlike the two flicker-related
+  entries above): `(` (tile 8) is part of the original thresholded
+  punctuation set the A-Z/0-9 redesign never touched (see "Letters and
+  numbers..." above), and its bitmap was uniformly `$20` on every row --
+  a straight column, not a curve, so on screen it reads as a stray
+  vertical stroke rather than an open parenthesis. `)` (tile 9) already
+  had a real, reasonable curve (top/bottom one column right of the
+  three middle rows); fixed `(` by mirroring it exactly (top/bottom one
+  column right of the middle rows). Verified via PyBoy: the tile 8
+  bitmap read back as a real left-bulging curve, and rendering the
+  actual "RAW TCP(NC)" label showed the fixed `(` correctly in place.
 - **`RawTcpPutChar` wrote to VRAM without turning the LCD off first.**
   Reported (2026-08-30) as some letters (e.g. "O") not showing up
   during a real Raw TCP session. Every other screen in this ROM
@@ -1287,6 +1331,18 @@ project owner's step):
   simulator quirk, and an `EMAIL_LINE_BUF_SIZE`-vs-real-reply-size gap)
   -- both fixed and reconfirmed by a second real run; see "Hard-won
   bugs" and the "Confirmed working" entry above for the full writeup.
+- **Email Send's new MIME-Version/From/To/Content-Type headers
+  (`BuildSmtpBody`, 2026-08-31)** are PyBoy-verified byte-for-byte
+  correct (see "What exists so far") and the header *format itself* was
+  separately confirmed to make Mobile Trainer able to open the resulting
+  message (by injecting a test message with these exact headers
+  directly into a real mailbox and opening it there) -- but this ROM's
+  own live SMTP send of that new format has not yet been re-run against
+  a real libmobile-bgb session the way the original (header-less)
+  Email Send test already was. Expected to keep passing (REON's SMTP
+  server doesn't validate header shape, only the `DATA`/`.`
+  terminator sequence, unchanged here), but not yet re-confirmed
+  end-to-end through this ROM specifically.
 - **P2P Caller/Listener** is the one piece of this ROM's own named
   scope (repo-root `CLAUDE.md`) not yet run against a real adapter --
   needs two real linked instances (two Game Boys + two Mobile Adapters,
