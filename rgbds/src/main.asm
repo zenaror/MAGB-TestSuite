@@ -2950,9 +2950,81 @@ sSmtpData: db "DATA", $0D, $0A
 sSmtpDataEnd:
 sSmtpQuit: db "QUIT", $0D, $0A
 sSmtpQuitEnd:
-; Same subject line gbdk's kTestEmailSubjectLine uses -- Email Recv's
-; delete_matching_test_emails()-equivalent looks for this exact text to
-; know which messages in the mailbox are safe to delete.
+
+; Appends B bytes from ROM at [HL] to wEmailCmdBuf, starting at the
+; current wEmailCmdLen offset, and advances wEmailCmdLen by B --
+; BuildSmtpBody's own byte-append primitive, shared across its several
+; fixed-text chunks so each chunk below is just one call instead of a
+; repeated copy loop.
+; Input: HL = source (ROM), B = length
+; Clobbers: everything
+AppendSmtpBodyBytes:
+    push hl ; save source pointer -- SM83 has no `ex de,hl`
+    ld a, [wEmailCmdLen]
+    ld e, a
+    ld d, 0
+    ld hl, wEmailCmdBuf
+    add hl, de
+    ld d, h
+    ld e, l   ; de = dest
+    pop hl    ; hl = source
+.loop
+    ld a, b
+    or a, a
+    ret z
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec b
+    ld a, [wEmailCmdLen]
+    inc a
+    ld [wEmailCmdLen], a
+    jr .loop
+
+; Same as AppendSmtpBodyBytes, but for a NUL-terminated string (the
+; NUL itself is not appended) -- BuildSmtpBody's From:/To: email
+; substitutions.
+; Input: HL = source (ROM or WRAM, NUL-terminated)
+; Clobbers: everything
+AppendSmtpBodyCstr:
+    push hl ; save source pointer -- SM83 has no `ex de,hl`
+    ld a, [wEmailCmdLen]
+    ld e, a
+    ld d, 0
+    ld hl, wEmailCmdBuf
+    add hl, de
+    ld d, h
+    ld e, l   ; de = dest
+    pop hl    ; hl = source
+.loop
+    ld a, [hl+]
+    or a, a
+    ret z
+    ld [de], a
+    inc de
+    push hl
+    ld a, [wEmailCmdLen]
+    inc a
+    ld [wEmailCmdLen], a
+    pop hl
+    jr .loop
+
+; Builds the full test message (MIME-Version/From/To/Subject/
+; Content-Type headers, a blank line, the test body, and the SMTP
+; end-of-DATA terminator) into wEmailCmdBuf, embedding the adapter's
+; own live wIdentityEmail as both From: and To: (this test always
+; mails itself). Real Mobile Trainer messages (dandocs-magb.md,
+; "Mobile Trainer", "Email") always carry at least this header set --
+; a bare "Subject: ...\r\n\r\nbody" (this test's original shape) sends
+; and round-trips fine over raw SMTP/POP3, and REON itself doesn't
+; reject it, but Mobile Trainer's own inbox couldn't display a message
+; received in that shape (confirmed by injecting a header-less test
+; message directly into a real test mailbox and trying to open it in
+; Mobile Trainer, then retrying with these headers added -- the
+; header-less version failed to open, this one didn't).
+; charset=iso-2022-jp is the value Mobile Trainer always sends and is
+; safe to declare even for plain ASCII text (a valid subset of
+; ISO-2022-JP's default/ASCII-mode state, no escape sequences needed).
 ;
 ; The body line deliberately does NOT end in a literal "." right before
 ; its CRLF (confirmed against REON's real mail/smtpConnection.js:
@@ -2971,11 +3043,47 @@ sSmtpQuitEnd:
 ; on this ROM's side. Dropping the trailing period here is the fix --
 ; not a REON bug this ROM can (or should) work around any more cleverly
 ; than "don't trip their line-terminator check".
-sSmtpBody:
-    db "Subject: MAGB TestSuite", $0D, $0A, $0D, $0A
+;
+; Same "Subject: MAGB TestSuite" text gbdk's kTestEmailSubjectLine
+; uses -- Email Recv's delete-matching scan looks for this exact text
+; to know which messages in the mailbox are safe to delete; unaffected
+; by which other headers surround it.
+;
+; Output: wEmailCmdBuf holds the built message, wEmailCmdLen its length
+; Clobbers: everything
+BuildSmtpBody:
+    xor a, a
+    ld [wEmailCmdLen], a
+
+    ld hl, sSmtpMimeFrom
+    ld b, sSmtpMimeFromEnd - sSmtpMimeFrom
+    call AppendSmtpBodyBytes
+
+    ld hl, wIdentityEmail
+    call AppendSmtpBodyCstr
+
+    ld hl, sSmtpToSep
+    ld b, sSmtpToSepEnd - sSmtpToSep
+    call AppendSmtpBodyBytes
+
+    ld hl, wIdentityEmail
+    call AppendSmtpBodyCstr
+
+    ld hl, sSmtpHeadersRest
+    ld b, sSmtpHeadersRestEnd - sSmtpHeadersRest
+    jp AppendSmtpBodyBytes
+
+sSmtpMimeFrom: db "MIME-Version: 1.0", $0D, $0A, "From: "
+sSmtpMimeFromEnd:
+sSmtpToSep: db $0D, $0A, "To: "
+sSmtpToSepEnd:
+sSmtpHeadersRest:
+    db $0D, $0A, "Subject: MAGB TestSuite", $0D, $0A
+    db "Content-Type: text/plain; charset=iso-2022-jp", $0D, $0A
+    db $0D, $0A
     db "Hello from the Mobile Adapter GB TestSuite ROM", $0D, $0A
     db ".", $0D, $0A
-sSmtpBodyEnd:
+sSmtpHeadersRestEnd:
 
 sExpect220: db "220"
 sExpect250: db "250"
@@ -3155,13 +3263,15 @@ RunEmailSendTest:
     or a, a
     jp nz, .dataCheckFail
 
-    ; message body, terminated by a lone "."
-    ld hl, sSmtpBody
+    ; message body (MIME-Version/From/To/Subject/Content-Type headers
+    ; + the test body), terminated by a lone "."
+    call BuildSmtpBody
+    ld hl, wEmailCmdBuf
     ld a, l
     ld [wEmailStepSendPtr], a
     ld a, h
     ld [wEmailStepSendPtr + 1], a
-    ld a, sSmtpBodyEnd - sSmtpBody
+    ld a, [wEmailCmdLen]
     ld [wEmailStepSendLen], a
     ld hl, sExpect250
     ld a, l
@@ -3324,9 +3434,9 @@ sPop3HeaderEnd1: db ".", $0D, $0A ; RFC 1939 multi-line terminator
 sPop3HeaderEnd1End:
 sPop3HeaderEnd2: db ".", $0A
 sPop3HeaderEnd2End:
-; Same text as (a substring of) sSmtpBody above -- a standalone copy is
-; needed here since this one is compared against, not sent, and needs
-; its own addressable start/end.
+; Same "Subject: MAGB TestSuite" text BuildSmtpBody's sSmtpHeadersRest
+; chunk sends -- a standalone copy is needed here since this one is
+; compared against, not sent, and needs its own addressable start/end.
 sSmtpSubjectLine: db "Subject: MAGB TestSuite"
 sSmtpSubjectLineEnd:
 sExpectOk: db "+OK"
@@ -5125,10 +5235,15 @@ wNewsArticleCfgStatus: ds 4 ; News Article's config-fetch status, stashed
                              ; before the article fetch overwrites
                              ; wGb00FetchStatusText
 
-DEF EMAIL_LINE_BUF_SIZE EQU 72 ; gbdk's MAGB_CONFIG_EMAIL_LEN(24) + 48 -- big
-                                 ; enough for every command *this ROM sends*
-                                 ; (wEmailCmdBuf only), never for a real
-                                 ; server reply -- see EMAIL_RECV_BUF_SIZE
+; Big enough for every command/message *this ROM sends* (wEmailCmdBuf
+; only), never for a real server reply -- see EMAIL_RECV_BUF_SIZE
+; below. Sized for the biggest thing wEmailCmdBuf ever holds:
+; BuildSmtpBody's full message (MIME-Version/From/To/Subject/
+; Content-Type headers + body + terminator), which embeds
+; wIdentityEmail twice (From:/To:) at up to MAGB_CONFIG_EMAIL_LEN each
+; -- matches gbdk's identical `2 * MAGB_CONFIG_EMAIL_LEN + 160` sizing
+; for the same buffer there.
+DEF EMAIL_LINE_BUF_SIZE EQU (2 * MAGB_CONFIG_EMAIL_LEN) + 160
 ; A real single Transfer Data response can be up to PROTO_MAX_PAYLOAD_LEN-1
 ; bytes (the MAGB protocol's own per-packet ceiling) REGARDLESS of what
 ; capacity this ROM asks for -- confirmed the hard way against a real
