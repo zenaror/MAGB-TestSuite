@@ -20,15 +20,22 @@
  * the Makefile's LCCFLAGS comment): with 8, 6, 6, 5, 5, 5, 4 and 3
  * call sites respectively, this was worth well over a hundred bytes,
  * the difference between fitting the on-screen keyboard and not. */
-static const char kMsgBeginSessionFailed[] = "BEGIN SESSION FAILED";
-static const char kMsgReadConfigFailed[]   = "READ CONFIG FAILED";
+/* "FAIL" rather than "FAILED" throughout this block -- purely a ROM
+ * budget trim (this ROM has no mapper, 32 KiB fixed; see the
+ * Makefile's LCCFLAGS comment) freed up when the Email Send test's
+ * message grew real MIME headers (see that test's own comment). Kept
+ * uniform across every constant in this group rather than shortening
+ * only as many as strictly needed, so no two of these disagree on
+ * which word for "didn't work" they use. */
+static const char kMsgBeginSessionFailed[] = "BEGIN SESSION FAIL";
+static const char kMsgReadConfigFailed[]   = "READ CONFIG FAIL";
 static const char kMsgTransferTimeout[]    = "TRANSFER TIMEOUT";
-static const char kMsgDialIspFailed[]      = "DIAL ISP FAILED";
-static const char kMsgIspLoginFailed[]     = "ISP LOGIN FAILED";
-static const char kMsgDnsQueryFailed[]     = "DNS QUERY FAILED";
-static const char kMsgTcpOpenFailed[]      = "TCP OPEN FAILED";
-static const char kMsgPhoneStatusFailed[]  = "PHONE STATUS FAILED";
-static const char kMsgEchoSendFailed[]     = "ECHO SEND FAILED";
+static const char kMsgDialIspFailed[]      = "DIAL ISP FAIL";
+static const char kMsgIspLoginFailed[]     = "ISP LOGIN FAIL";
+static const char kMsgDnsQueryFailed[]     = "DNS QUERY FAIL";
+static const char kMsgTcpOpenFailed[]      = "TCP OPEN FAIL";
+static const char kMsgPhoneStatusFailed[]  = "PHONE STATUS FAIL";
+static const char kMsgEchoSendFailed[]     = "ECHO SEND FAIL";
 static const char kMsgHelloWorldOk[]       = "HELLO WORLD OK";
 static const char kMsgNoCall[]             = "NO CALL";
 static const char kMsgBadTestFrame[]       = "BAD TEST FRAME";
@@ -965,7 +972,12 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
     magb_isp_login_result_t isp;
     uint8_t host_ip[4];
     uint8_t conn_id = 0U;
-    static char line[MAGB_CONFIG_EMAIL_LEN + 48U];
+    /* Large enough for the biggest single line_step() argument this
+     * function builds: the full message (MIME-Version/From/To/Subject/
+     * Content-Type headers + blank line + test body + terminator, see
+     * the DATA line_step() call below), which embeds id.email twice
+     * (From:/To:) at up to MAGB_CONFIG_EMAIL_LEN each. */
+    static char line[2U * MAGB_CONFIG_EMAIL_LEN + 160U];
     bool remote_closed;
     magb_result_t r;
 
@@ -1045,9 +1057,31 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
         return;
     }
 
-    if (!line_step(ctx, conn_id,
-            kTestEmailSubjectLine "\r\n\r\nHello from the Mobile Adapter GB TestSuite ROM\r\n.\r\n",
-            line, sizeof(line), "250", &r, &remote_closed)) {
+    /* Real Mobile Trainer messages (dandocs-magb.md, "Mobile Trainer",
+     * "Email") always carry at least MIME-Version/From/To/Content-Type
+     * -- a bare "Subject: ...\r\n\r\nbody" (this test's original shape)
+     * sends and round-trips fine over raw SMTP/POP3, and REON itself
+     * doesn't reject it, but Mobile Trainer's own inbox couldn't
+     * display a message received in that shape (confirmed by injecting
+     * a header-less test message directly into a real test mailbox and
+     * trying to open it in Mobile Trainer, then retrying with these
+     * headers added -- the header-less version failed to open, this one
+     * didn't). charset=iso-2022-jp is the value Mobile Trainer always
+     * sends and is safe to declare even for plain ASCII text (which is
+     * a valid subset of ISO-2022-JP's default/ASCII-mode state, no
+     * escape sequences needed) -- see "GB00 HTTP authentication"-
+     * adjacent notes in protocol-notes.md for how this was confirmed. */
+    sprintf(line,
+            "MIME-Version: 1.0\r\n"
+            "From: %s\r\n"
+            "To: %s\r\n"
+            "Subject: MAGB TestSuite\r\n"
+            "Content-Type: text/plain; charset=iso-2022-jp\r\n"
+            "\r\n"
+            "Hello from the Mobile Adapter GB TestSuite ROM\r\n"
+            ".\r\n",
+            id.email, id.email);
+    if (!line_step(ctx, conn_id, line, line, sizeof(line), "250", &r, &remote_closed)) {
         result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MESSAGE REJECTED");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;

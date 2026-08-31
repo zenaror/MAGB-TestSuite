@@ -190,6 +190,32 @@ mover mais rápido" não existia aqui, diferente do GBDK) foi fechada
 junto -- segurar uma direção agora acelera depois de meio segundo,
 igual ao GBDK.
 
+## E-mail: mandava certo, mas o Mobile Trainer não conseguia abrir
+
+Mesma descoberta que a versão em GBDK teve, na mesma sessão: as
+mensagens de teste enviadas por este ROM chegavam certinho por POP3,
+mas o Mobile Trainer de verdade não conseguia abri-las na caixa de
+entrada. A causa: mensagens reais que o próprio Mobile Trainer manda
+sempre levam um conjunto de cabeçalhos (`MIME-Version`, `From`, `To`,
+`Content-Type: text/plain; charset=iso-2022-jp`) que a nossa mensagem
+de teste nunca teve -- só um `Subject:`. Confirmado antes de mexer em
+qualquer código: injetando uma mensagem de teste direto numa caixa de
+entrada real, sem esses cabeçalhos (Mobile Trainer não abriu) e depois
+com eles (abriu normalmente).
+
+Corrigido: o envio agora monta a mensagem com esses mesmos cabeçalhos,
+usando o e-mail real lido do adaptador tanto em `From:` quanto em `To:`.
+Diferente da versão em GBDK, aqui não faltou espaço de ROM (sobrava bastante),
+só precisou aumentar o buffer que monta a mensagem (de 72 para 208
+bytes) e trocar uma tentativa inicial de escrita (`ex de,hl`) por
+outra, já que essa instrução do Z80 nem existe no SM83 do Game Boy.
+Verificado byte a byte via PyBoy -- inclusive um teste que primeiro deu
+lixo no meio da string, rastreado até a própria técnica de teste (jogar
+o PC direto no meio de um "tick" pode corromper a execução de um jeito
+que não tem nada a ver com o código sendo testado); usando um hook num
+ponto de execução real em vez de um endereço arbitrário, o resultado
+saiu perfeito de primeira.
+
 ## O que falta
 
 Com o Raw TCP confirmado também, só falta o P2P (Caller/Listener) —
