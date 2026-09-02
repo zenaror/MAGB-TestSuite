@@ -65,6 +65,25 @@ SECTION "Header", ROM0[$100]
 SECTION "Main", ROM0
 
 EntryPoint:
+    ; Explicit stack init, before anything else (including the very
+    ; first `call` two lines below) touches SP. A cold boot already
+    ; has SP=$FFFE here courtesy of the boot ROM, so this looked
+    ; unnecessary and nothing here ever set it -- but a reset that
+    ; *doesn't* replay the boot ROM (confirmed against BGB's own Reset
+    ; command while a hung session had left SP pointing into ROM0
+    ; instead of HRAM, from mid-way through some earlier call chain)
+    ; carries whatever SP was at the moment of reset forward into
+    ; EntryPoint. The very next `call SerialHwInit` then pushes a
+    ; return address at that stale, invalid address -- into ROM, a
+    ; read-only write that's silently dropped -- corrupting the "stack"
+    ; further with every subsequent call/push until execution wanders
+    ; into whatever garbage PC a bad `ret` picks up (matches a real
+    ; crash reported this way: PC executing recognizable-looking noise,
+    ; SP found equal to PC). Matches gbdk's own SDCC-generated crt0
+    ; startup, which always sets SP explicitly for exactly this reason
+    ; before any application code runs.
+    ld sp, $FFFE
+
     ; A still holds the boot-time hardware ID ($11 CGB / $01 DMG) here --
     ; nothing before this touches A. SerialHwInit halts forever if this
     ; isn't a CGB.
