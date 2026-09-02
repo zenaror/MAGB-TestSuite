@@ -5244,8 +5244,10 @@ wNewsArticleCfgStatus: ds 4 ; News Article's config-fetch status, stashed
 ; -- matches gbdk's identical `2 * MAGB_CONFIG_EMAIL_LEN + 160` sizing
 ; for the same buffer there.
 DEF EMAIL_LINE_BUF_SIZE EQU (2 * MAGB_CONFIG_EMAIL_LEN) + 160
-; A real single Transfer Data response can be up to PROTO_MAX_PAYLOAD_LEN-1
-; bytes (the MAGB protocol's own per-packet ceiling) REGARDLESS of what
+; A real single Transfer Data response can be up to PROTO_MAX_RX_PAYLOAD_LEN-1
+; bytes (the real adapter's actual per-packet receive ceiling -- see
+; protocol.inc's PROTO_MAX_RX_PAYLOAD_LEN comment for why this is 255,
+; not the smaller send-only PROTO_MAX_PAYLOAD_LEN) REGARDLESS of what
 ; capacity this ROM asks for -- confirmed the hard way against a real
 ; POP3 TOP reply (5 header lines + terminator, ~77 bytes) that arrived as
 ; one packet: MagbTransferData's own clamp-to-output-capacity silently
@@ -5257,11 +5259,15 @@ DEF EMAIL_LINE_BUF_SIZE EQU (2 * MAGB_CONFIG_EMAIL_LEN) + 160
 ; gets nothing, and Email Recv's header-scan loop spun through all 40
 ; iterations, each a real ~15s network round trip, before ever giving up
 ; -- the "trava"/infinite `>>> 15 Transfer data` loop a real libmobile-bgb
-; run surfaced (2026-08-29/30). Fixed by giving wEmailLineBuf enough
-; capacity that this clamp can never trigger for a real single-packet
-; reply: PROTO_MAX_PAYLOAD_LEN itself, the same margin HTTP GET/GB00
-; fetches already have relative to *their* single-poll capacity.
-DEF EMAIL_RECV_BUF_SIZE EQU PROTO_MAX_PAYLOAD_LEN
+; run surfaced (2026-08-29/30). Originally fixed with PROTO_MAX_PAYLOAD_LEN
+; (254) here, which covered every case actually seen but left the same
+; one-byte gap gbdk's line[] had (a reply with *exactly* 254 real data
+; bytes -- payload_len=255 -- would still have clamped by 1 byte); bumped
+; to PROTO_MAX_RX_PAYLOAD_LEN once gbdk hit and fixed that exact gap
+; against a real production 401 challenge response, to keep both
+; implementations receive-side identical rather than differing by a
+; single byte nobody had happened to trigger yet.
+DEF EMAIL_RECV_BUF_SIZE EQU PROTO_MAX_RX_PAYLOAD_LEN
 
 SECTION "Email Test Scratch", WRAM0
 wEmailLineBuf: ds EMAIL_RECV_BUF_SIZE ; reused for every SMTP/POP3 reply
