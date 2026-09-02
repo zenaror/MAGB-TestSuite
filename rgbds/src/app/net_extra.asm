@@ -126,7 +126,28 @@ TcpRecvLine::
     xor a, a
 .haveCap
     or a, a
-    jp z, .done ; no room left
+    jr nz, .capNonzero
+    ; Dest buffer filled up without '\n' yet -- a real production mail
+    ; server (Postfix) prepends its own `Received:` header, which
+    ; routinely runs well past any of this ROM's small line buffers
+    ; (confirmed by a hang report against mail.reon.zsrv.com.br: POP3
+    ; TOP's header scan stalled right after such a header). Rewind to
+    ; the top of the dest buffer and keep reading -- overwriting it --
+    ; instead of stopping here, so the unread remainder of this same
+    ; line never desyncs the next TcpRecvLine call onto the wrong byte
+    ; offset for the rest of the scan; that's the failure mode
+    ; reported (this loop never outright breaks, LINE_RECV_MAX_POLLS
+    ; still bounds it, but line after line stops lining up with
+    ; anything the caller expects). The dest buffer ends up holding
+    ; only the last chunk once this happens, not the true line content
+    ; -- fine, since every caller already treats a header it doesn't
+    ; recognize as "skip, never guess" rather than matching it.
+    ; Matches gbdk's identical tcp_recv_line() fix.
+    xor a, a
+    ld [wLineLen], a
+    ld a, [wLineDestCap]
+    dec a
+.capNonzero
     ld [wLineCap], a
 
     ; write pointer for this iteration = destPtr + len
