@@ -202,7 +202,7 @@ void test_read_config(magb_context_t *ctx, uint8_t config_out[MAGB_CONFIG_SIZE],
     } else {
         out->passed = true;
         sprintf(out->detail[0], "192 BYTES READ");
-        sprintf(out->detail[1], "SEE CONFIG SCREEN");
+        sprintf(out->detail[1], "SEE CONFIG SCR");
     }
 
     (void)magb_end_session(ctx);
@@ -402,7 +402,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
                             &s_http_resp[resp_len], (uint8_t)HTTP_RESP_BUF_SIZE,
                             &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
     if (r != MAGB_OK) {
-        result_fail_code(out, r, "HTTP SEND FAILED", kCode32000);
+        result_fail_code(out, r, "HTTP SEND FAIL", kCode32000);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
@@ -417,7 +417,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
                                 &s_http_resp[resp_len], cap,
                                 &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
         if (r != MAGB_OK) {
-            result_fail_code(out, r, "HTTP RECV FAILED", kCode32000);
+            result_fail_code(out, r, "HTTP RECV FAIL", kCode32000);
             isp_http_cleanup(ctx, conn_id, true, true);
             return;
         }
@@ -624,7 +624,7 @@ static magb_result_t gb00_fetch(magb_context_t *ctx, const uint8_t host_ip[4], u
     r = gb00_http_get(ctx, conn_id, host, path, NULL, resp_len, &remote_closed);
     if (r != MAGB_OK) {
         (void)magb_tcp_close(ctx, conn_id);
-        *fail_stage = "HTTP SEND FAILED";
+        *fail_stage = "HTTP SEND FAIL";
         return r;
     }
 
@@ -651,7 +651,7 @@ static magb_result_t gb00_fetch(magb_context_t *ctx, const uint8_t host_ip[4], u
      * is implied by HTTP/1.0); re-open before the authenticated retry. */
     (void)magb_tcp_close(ctx, conn_id);
     r = magb_tcp_open(ctx, host_ip, port, &conn_id);
-    if (r != MAGB_OK) { *fail_stage = "TCP REOPEN FAILED"; return r; }
+    if (r != MAGB_OK) { *fail_stage = "TCP REOPEN FAIL"; return r; }
 
     {
         char auth_value[GB00_AUTHORIZATION_LEN + 1U];
@@ -661,7 +661,7 @@ static magb_result_t gb00_fetch(magb_context_t *ctx, const uint8_t host_ip[4], u
 
     r = gb00_http_get(ctx, conn_id, host, path, auth_header, resp_len, &remote_closed);
     (void)magb_tcp_close(ctx, conn_id);
-    if (r != MAGB_OK) { *fail_stage = "AUTH SEND FAILED"; return r; }
+    if (r != MAGB_OK) { *fail_stage = "AUTH SEND FAIL"; return r; }
 
     if (!gb00_status_code(s_gb00_resp, *resp_len, status)) {
         *fail_stage = "NO HTTP/ AFTER AUTH";
@@ -881,7 +881,24 @@ static void tcp_line_reset(void)
  * exhausted -- whichever comes first. Returns whatever was
  * accumulated even on a timeout/close, so the caller can still
  * inspect a partial line (e.g. to tell a real "-ERR" apart from
- * nothing at all). */
+ * nothing at all).
+ *
+ * A real production mail server (Postfix) prepends its own `Received:`
+ * header, which routinely runs well past any of this ROM's small line
+ * buffers (confirmed by a hang report against mail.reon.zsrv.com.br:
+ * POP3 TOP's header scan stalled right after such a header). If `buf`
+ * fills up before '\n' shows up, this keeps reading -- rewinding back
+ * to the top of `buf` and overwriting it each time -- until '\n' is
+ * finally found, instead of returning early and leaving the rest of
+ * that same line sitting unread in the connection. Leaving it there
+ * would desync every subsequent tcp_recv_line() call onto the wrong
+ * byte offset for the rest of the scan; that's the failure mode
+ * reported (the loop never outright breaks, LINE_RECV_MAX_POLLS still
+ * bounds it, but line after line stops lining up with anything the
+ * caller expects). `buf` ends up holding only the last chunk once
+ * this happens, not the true line content -- fine, since every caller
+ * already treats a header it doesn't recognize as "skip, never guess"
+ * rather than matching it. */
 static magb_result_t tcp_recv_line(magb_context_t *ctx, uint8_t conn_id,
                                     char *buf, uint8_t buf_cap, bool *remote_closed)
 {
@@ -899,7 +916,8 @@ static magb_result_t tcp_recv_line(magb_context_t *ctx, uint8_t conn_id,
         uint8_t i;
 
         if (cap == 0U) {
-            break;
+            len = 0U;
+            cap = (uint8_t)(buf_cap - 1U);
         }
 
         if (s_line_pending_pos < s_line_pending_len) {
@@ -1026,33 +1044,33 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
 
     r = tcp_recv_line(ctx, conn_id, line, sizeof(line), &remote_closed);
     if (r != MAGB_OK || strncmp(line, "220", 3) != 0) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "NO SMTP GREETING");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "NO SMTP GREET");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     if (!line_step(ctx, conn_id, "HELO magbtestsuite\r\n", line, sizeof(line), "250", &r, &remote_closed)) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "HELO REJECTED");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "HELO REJ");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     sprintf(line, "MAIL FROM:<%s>\r\n", id.email);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "250", &r, &remote_closed)) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MAIL FROM REJECTED");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MAIL FROM REJ");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     sprintf(line, "RCPT TO:<%s>\r\n", id.email);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "250", &r, &remote_closed)) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "RCPT TO REJECTED");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "RCPT TO REJ");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     if (!line_step(ctx, conn_id, "DATA\r\n", line, sizeof(line), "354", &r, &remote_closed)) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "DATA REJECTED");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "DATA REJ");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
@@ -1082,7 +1100,7 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
             ".\r\n",
             id.email, id.email);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "250", &r, &remote_closed)) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MESSAGE REJECTED");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MSG REJ");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
@@ -1172,7 +1190,24 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
     magb_isp_login_result_t isp;
     uint8_t host_ip[4];
     uint8_t conn_id = 0U;
-    static char line[96];
+    /* A real single Transfer Data response can be up to
+     * MAGB_MAX_PAYLOAD-1 bytes REGARDLESS of what capacity this ROM
+     * asks for -- confirmed against a real POP3 TOP reply (headers +
+     * terminator, ~226 bytes) that arrived as one packet:
+     * magb_transfer_data()'s own clamp-to-out_cap silently drops
+     * whatever doesn't fit (its "caller re-polls" assumption doesn't
+     * hold -- the adapter already delivered its *entire* single-packet
+     * reply in that one exchange, so the dropped tail, e.g. the
+     * reply's own end-of-message terminator, is gone for good). Every
+     * following poll for "the rest" then legitimately gets nothing,
+     * and the header-scan loop below spins through all its iterations
+     * before ever giving up -- this is the infinite `Transfer data`
+     * hang reported against production. Sized to MAGB_MAX_RX_PAYLOAD
+     * (255, not the smaller send-only MAGB_MAX_PAYLOAD -- see that
+     * constant's comment) so the clamp can never trigger for a real
+     * single-packet reply, matching rgbds's EMAIL_RECV_BUF_SIZE fix
+     * for the identical bug. */
+    static char line[MAGB_MAX_RX_PAYLOAD];
     bool remote_closed;
     magb_result_t r;
     uint8_t i;
@@ -1233,27 +1268,27 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
 
     r = tcp_recv_line(ctx, conn_id, line, sizeof(line), &remote_closed);
     if (r != MAGB_OK || strncmp(line, "+OK", 3) != 0) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "NO POP3 GREETING", kCode31002);
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "NO POP3 GREET", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     sprintf(line, "USER %s\r\n", user);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "+OK", &r, &remote_closed)) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "USER REJECTED", kCode31002);
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "USER REJ", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     sprintf(line, "PASS %s\r\n", password);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "+OK", &r, &remote_closed)) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "LOGIN FAILED", kCode31002);
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "LOGIN FAIL", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     if (!line_step(ctx, conn_id, "STAT\r\n", line, sizeof(line), "+OK", &r, &remote_closed)) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "STAT FAILED", kCode31002);
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "STAT FAIL", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
@@ -1587,7 +1622,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     }
 
     r = p2p_send_frame(ctx, 1U, (const uint8_t *)"PING", 4U);
-    if (r != MAGB_OK) { result_fail(out, r, "PING SEND FAILED"); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { result_fail(out, r, "PING SEND FAIL"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
     if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
@@ -1598,7 +1633,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     }
 
     r = p2p_send_frame(ctx, 2U, pattern, sizeof(pattern));
-    if (r != MAGB_OK) { result_fail(out, r, "PATTERN SEND FAILED"); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { result_fail(out, r, "PATTERN SEND FAIL"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
     if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
@@ -1616,7 +1651,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
      * the link and back, as a plain, at-a-glance "yes, this really
      * worked" on top of the raw byte counts. */
     r = p2p_send_frame(ctx, 3U, (const uint8_t *)kHelloWorld, 11U);
-    if (r != MAGB_OK) { result_fail(out, r, "HELLO SEND FAILED"); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { result_fail(out, r, "HELLO SEND FAIL"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
     if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
@@ -1681,7 +1716,7 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     }
 
     r = p2p_send_frame(ctx, recv_seq, (const uint8_t *)"PONG", 4U);
-    if (r != MAGB_OK) { result_fail(out, r, "PONG SEND FAILED"); p2p_cleanup(ctx); return; }
+    if (r != MAGB_OK) { result_fail(out, r, "PONG SEND FAIL"); p2p_cleanup(ctx); return; }
 
     r = p2p_recv_frame(ctx, &recv_seq, recv_payload, &recv_len);
     if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }

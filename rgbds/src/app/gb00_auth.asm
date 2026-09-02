@@ -1449,13 +1449,20 @@ Gb00BuildAuthorization::
 ; "no packed structs, explicit serialization" convention (repo-root
 ; CLAUDE.md).
 ;
-; 300 bytes, matching gbdk's own GB00_RESP_BUF_SIZE exactly: gbdk
+; 360 bytes, matching gbdk's own GB00_RESP_BUF_SIZE exactly: gbdk
 ; measured a real nginx 401 challenge response (headers + the ~81-byte
 ; WWW-Authenticate line) at 227 bytes from a real BGB link-log capture
 ; -- 200 silently truncated it there, so this port starts from gbdk's
 ; already-hard-won number instead of re-deriving a smaller one and
-; risking the same bug.
-DEF GB00_RESP_BUF_SIZE EQU 300
+; risking the same bug. Was 300 here for a while (this file's own
+; earlier fix, matching gbdk's *then*-current number); bumped to 360
+; when gbdk's own bumped again for room the News Article path needs
+; (a real, larger, WWW-Authenticate-less 200 OK binary body from
+; get_news_parameters_bin()/get_news_file()) -- this port had drifted
+; one bump behind gbdk's, which is exactly the kind of divergence this
+; file's own comment above warns against re-deriving a number instead
+; of copying gbdk's current one.
+DEF GB00_RESP_BUF_SIZE EQU 360
 DEF GB00_MAX_EMPTY_POLLS EQU 5
 ; Comfortably covers the largest real request this ROM builds (News
 ; Article's authenticated retry measures 238 bytes: prefix 122 + the
@@ -1478,7 +1485,7 @@ wGb00FetchDidAuth:: db
 wGb00FetchFailMsgPtr:: dw   ; valid only when Gb00FetchOne returns MAGB_ERR_ISP
 
 wGb00RespBuf: ds GB00_RESP_BUF_SIZE
-wGb00RespLen: dw ; 16-bit: GB00_RESP_BUF_SIZE(300) exceeds a byte's range
+wGb00RespLen: dw ; 16-bit: GB00_RESP_BUF_SIZE(360) exceeds a byte's range
 wGb00EmptyPolls: db
 wGb00FetchChallenge: ds GB00_CHALLENGE_LEN ; NOT NUL-terminated, matches
                                             ; Gb00BuildAuthorization's HL input
@@ -1505,7 +1512,7 @@ Gb00HttpGetOnce:
     ld [wGb00EmptyPolls], a
 
     ld hl, wGb00RespBuf
-    ld b, 255 ; GB00_RESP_BUF_SIZE(300) > 255 -- the first call is always capped at 255
+    ld b, 255 ; GB00_RESP_BUF_SIZE(360) > 255 -- the first call is always capped at 255
     ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
     ld [wExecTimeoutFrames], a
     ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8

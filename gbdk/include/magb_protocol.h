@@ -38,6 +38,24 @@
 #define MAGB_CHECKSUM_LEN 2U
 #define MAGB_MAX_PAYLOAD 254U
 
+/* The real adapter's actual receive-side limit is larger than
+ * MAGB_MAX_PAYLOAD: Dan Docs ("Packet length limits") says the real
+ * Mobile Adapter discards packets larger than 255 bytes, not 254 --
+ * 254 is only the conventional cap *software* chooses for what it
+ * sends, not a hard ceiling on what the adapter itself returns.
+ * Confirmed against a real response (a Transfer Data reply carrying
+ * payload_len = 255: conn_id byte + a full 254-byte HTTP chunk) that
+ * magb_parser_feed() used to write one byte past a payload[254] array
+ * for, silently corrupting the payload_len field stored right after
+ * it in magb_packet_t. 255 is also the natural maximum of the wire's
+ * 8-bit length-low byte, so there's no larger legal value to size
+ * for. Used only for magb_packet_t.payload[]'s array size -- every
+ * outgoing-frame cap (magb_build_frame() et al.) still uses
+ * MAGB_MAX_PAYLOAD, matching rgbds's identical
+ * PROTO_MAX_PAYLOAD_LEN/PROTO_MAX_RX_PAYLOAD_LEN split (protocol.inc),
+ * which hit and fixed this exact real-world case first. */
+#define MAGB_MAX_RX_PAYLOAD 255U
+
 /* magic(2) + header(4) + payload(<=254) + checksum(2) */
 #define MAGB_MAX_FRAME_LEN (2U + MAGB_HEADER_LEN + MAGB_MAX_PAYLOAD + MAGB_CHECKSUM_LEN)
 
@@ -94,7 +112,7 @@ typedef enum {
 typedef struct {
     uint8_t command;
     uint8_t reserved;
-    uint8_t payload[MAGB_MAX_PAYLOAD];
+    uint8_t payload[MAGB_MAX_RX_PAYLOAD]; /* sized for receive, see MAGB_MAX_RX_PAYLOAD */
     uint8_t payload_len;
 } magb_packet_t;
 
