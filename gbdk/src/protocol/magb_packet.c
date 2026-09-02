@@ -125,6 +125,23 @@ magb_rx_state_t magb_parser_feed(magb_parser_t *p, uint8_t byte)
 
     case MAGB_RX_LENGTH_LOW:
         p->checksum_calc += (uint16_t)byte;
+        /* No upper-bound check here: byte is already an 8-bit value
+         * (0..255), and MAGB_MAX_RX_PAYLOAD (255, magb_protocol.h) --
+         * the real adapter's own documented receive limit, per Dan
+         * Docs -- is exactly that type's maximum, so every possible
+         * value is already legal and packet.payload[] (sized for
+         * MAGB_MAX_RX_PAYLOAD) already has room for it. This state
+         * used to accept the byte at face value but size payload[] for
+         * the smaller, send-only MAGB_MAX_PAYLOAD (254) instead,
+         * silently overrunning it by one byte -- and corrupting
+         * payload_len itself, stored right after payload[] -- against
+         * a real 255-byte Transfer Data response (a WWW-Authenticate
+         * challenge that a raw capture confirmed arrived intact but
+         * failed to parse downstream). Fixed by sizing payload[] for
+         * MAGB_MAX_RX_PAYLOAD instead of rejecting the byte -- matches
+         * rgbds's own ReadResponseFrame, which hit and fixed this
+         * identical case first (see protocol.inc's
+         * PROTO_MAX_RX_PAYLOAD_LEN comment). */
         p->expected_len = (uint16_t)byte;
         p->packet.payload_len = byte;
         p->payload_index = 0U;
