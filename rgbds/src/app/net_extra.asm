@@ -32,9 +32,20 @@
 INCLUDE "protocol.inc"
 
 DEF LINE_RECV_MAX_POLLS EQU 60 ; matches gbdk's LINE_RECV_MAX_POLLS
-DEF LINE_PENDING_MAX EQU PROTO_MAX_PAYLOAD_LEN ; worst case: one whole
-                                                 ; Transfer Data response,
-                                                 ; all of it past the '\n'
+DEF LINE_PENDING_MAX EQU PROTO_MAX_RX_PAYLOAD_LEN ; worst case: one whole
+                                                 ; Transfer Data response
+                                                 ; (up to the real
+                                                 ; adapter's actual
+                                                 ; receive ceiling, not
+                                                 ; the smaller send-only
+                                                 ; PROTO_MAX_PAYLOAD_LEN
+                                                 ; -- see that constant's
+                                                 ; comment), all of it
+                                                 ; past the '\n', or (as
+                                                 ; of TcpSendLine below)
+                                                 ; an entire reply that
+                                                 ; came back bundled
+                                                 ; with our own send
 
 SECTION "Line Recv Scratch", WRAM0
 wLinePendingBuf: ds LINE_PENDING_MAX
@@ -61,9 +72,22 @@ TcpLineReset::
     ld [wLinePendingPos], a
     ret
 
-; Sends a line (or any raw bytes) over wTcpConnId, discarding whatever
-; comes back immediately (a real reply is read separately via
-; TcpRecvLine, matching gbdk's tcp_send_line()).
+; Sends a line (or any raw bytes) over wTcpConnId, and stashes whatever
+; the adapter hands back *with that same send* into the pending buffer
+; above -- instead of discarding it -- so the next TcpRecvLine() call
+; picks it up naturally. A real, slow POP3/SMTP server never has a
+; reply ready that fast, so this always came back empty against any of
+; those -- but REON's device-auth interception synthesizes some
+; replies (e.g. a faked local "+OK user accepted" for POP3 USER)
+; instantly, with no real network round trip at all, and a real
+; capture confirmed the adapter delivers that reply bundled with the
+; ack for the USER send itself, not via a later poll. Discarding it
+; here (the previous behavior: HL=0/B=0, a 0-capacity destination)
+; threw that entire reply away with nowhere left to recover it from --
+; every later TcpRecvLine() poll then legitimately got nothing back,
+; hanging forever waiting for a "+OK" line that had already arrived
+; and been dropped. Matches gbdk's identical tcp_send_line() fix for
+; the same real-world bug.
 ;
 ; Input: HL = bytes to send, B = length
 ; Output: A = result (0=OK)
@@ -72,13 +96,23 @@ TcpSendLine::
     ld d, h
     ld e, l
     ld c, b
-    ld hl, 0
-    ld b, 0
+    ld hl, wLinePendingBuf
+    ld b, LINE_PENDING_MAX
     ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
     ld [wExecTimeoutFrames], a
     ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
     ld [wExecTimeoutFrames + 1], a
-    jp MagbTransferData
+    call MagbTransferData
+    or a, a
+    ret nz ; real transport error -- propagate, nothing to stash
+
+    ld a, [wXferGotLen]
+    or a, a
+    ret z ; nothing came back bundled with this send -- the normal case
+    ld [wLinePendingLen], a
+    xor a, a
+    ld [wLinePendingPos], a
+    ret
 
 ; Accumulates response bytes into [DE] (always NUL-terminated) until a
 ; '\n' is seen, the connection closes, or LINE_RECV_MAX_POLLS is

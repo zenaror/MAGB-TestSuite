@@ -37,8 +37,8 @@ static const char kMsgTcpOpenFailed[]      = "TCP OPEN FAIL";
 static const char kMsgPhoneStatusFailed[]  = "PHONE STATUS FAIL";
 static const char kMsgEchoSendFailed[]     = "ECHO SEND FAIL";
 static const char kMsgHelloWorldOk[]       = "HELLO WORLD OK";
-static const char kMsgNoCall[]             = "NO CALL";
-static const char kMsgBadTestFrame[]       = "BAD TEST FRAME";
+static const char kMsgNoCall[]             = "NOCALL";
+static const char kMsgBadTestFrame[]       = "BAD FRAME";
 static const char kHelloWorld[]            = "HELLO WORLD";
 
 /* Official Nintendo Mobile Adapter error codes (docs/protocol-notes.md)
@@ -843,15 +843,6 @@ static uint16_t parse_leading_uint(const char *s)
     return v;
 }
 
-static magb_result_t tcp_send_line(magb_context_t *ctx, uint8_t conn_id, const char *line)
-{
-    uint8_t discard[1];
-    uint8_t got_len;
-    bool remote_closed;
-    return magb_transfer_data(ctx, conn_id, (const uint8_t *)line, (uint8_t)strlen(line),
-                               discard, 0U, &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
-}
-
 #define LINE_RECV_MAX_POLLS 60U
 
 /* A single TCP receive can carry more than one protocol line -- a real
@@ -866,7 +857,7 @@ static magb_result_t tcp_send_line(magb_context_t *ctx, uint8_t conn_id, const c
  * network read. Reset via tcp_line_reset() right after each fresh
  * magb_tcp_open(), so leftovers from a previous connection can never
  * bleed into a new one. */
-static uint8_t s_line_pending[MAGB_MAX_PAYLOAD];
+static uint8_t s_line_pending[MAGB_MAX_RX_PAYLOAD];
 static uint8_t s_line_pending_len;
 static uint8_t s_line_pending_pos;
 
@@ -874,6 +865,37 @@ static void tcp_line_reset(void)
 {
     s_line_pending_len = 0U;
     s_line_pending_pos = 0U;
+}
+
+/* Sends `line` over `conn_id` and stashes whatever the adapter hands
+ * back *with that same send* into s_line_pending, instead of
+ * discarding it. A real, slow POP3/SMTP server never has a reply
+ * ready that fast, so this always came back empty against any of
+ * those -- but REON's device-auth interception synthesizes some
+ * replies (e.g. a faked local "+OK user accepted" for POP3 USER)
+ * instantly, with no real network round trip at all, and a real
+ * capture confirmed the adapter delivers that reply bundled with the
+ * ack for the USER send itself, not via a later poll. Discarding it
+ * here (the previous behavior: a 0-capacity `discard[1]` buffer) threw
+ * that entire reply away with nowhere left to recover it from --
+ * every later tcp_recv_line() poll then legitimately got nothing
+ * back, hanging forever waiting for a "+OK" line that had already
+ * arrived and been dropped. Confirmed against a real trace: PASS never
+ * even got built (a temporary diagnostic print placed right before
+ * that sprintf() never fired), narrowing this down to exactly this
+ * function. */
+static magb_result_t tcp_send_line(magb_context_t *ctx, uint8_t conn_id, const char *line)
+{
+    uint8_t got_len;
+    bool remote_closed;
+    magb_result_t r = magb_transfer_data(ctx, conn_id, (const uint8_t *)line, (uint8_t)strlen(line),
+                                          s_line_pending, (uint8_t)sizeof(s_line_pending),
+                                          &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
+    if (r == MAGB_OK && got_len > 0U) {
+        s_line_pending_len = got_len;
+        s_line_pending_pos = 0U;
+    }
+    return r;
 }
 
 /* Accumulates response bytes into `buf` (always NUL-terminated) until
@@ -1007,7 +1029,7 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
     r = read_isp_identity(ctx, &id);
     if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
     if (id.email[0] == '\0' || id.smtp[0] == '\0') {
-        result_fail(out, MAGB_ERR_ISP, "NO EMAIL/SMTP IN CFG");
+        result_fail(out, MAGB_ERR_ISP, "NO EMAIL/SMTP CFG");
         (void)magb_end_session(ctx);
         return;
     }
@@ -1221,7 +1243,7 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
     r = read_isp_identity(ctx, &id);
     if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
     if (id.email[0] == '\0' || id.pop[0] == '\0') {
-        result_fail(out, MAGB_ERR_ISP, "NO EMAIL/POP IN CFG");
+        result_fail(out, MAGB_ERR_ISP, "NO EMAIL/POP CFG");
         (void)magb_end_session(ctx);
         return;
     }
@@ -1279,7 +1301,6 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
-
     sprintf(line, "PASS %s\r\n", password);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "+OK", &r, &remote_closed)) {
         result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "LOGIN FAIL", kCode31002);
