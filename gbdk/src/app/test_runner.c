@@ -173,7 +173,7 @@ void test_adapter_session(magb_context_t *ctx, test_result_t *out)
 
     out->passed = true;
     sprintf(out->detail[0], "ADAPTER ID: %hx", (unsigned char)ctx->adapter_device);
-    sprintf(out->detail[1], "NINTENDO ECHO OK");
+    sprintf(out->detail[1], "NIN ECHO OK");
 
     (void)magb_end_session(ctx);
 }
@@ -188,7 +188,7 @@ void test_read_config(magb_context_t *ctx, uint8_t config_out[MAGB_CONFIG_SIZE],
     if (!ctx->session_active) {
         r = magb_begin_session(ctx);
         if (r != MAGB_OK) {
-            result_fail(out, r, "NO SESSION");
+            result_fail(out, r, "NOSESSION");
             return;
         }
     }
@@ -459,7 +459,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
     } else {
         out->passed = false;
         out->result = MAGB_OK; /* transport worked; this is an application-layer mismatch */
-        sprintf(out->detail[0], "TRANSPORT OK");
+        sprintf(out->detail[0], "XPORT OK");
         sprintf(out->detail[1], "NO HTTP/ PREFIX");
         strcpy(out->official_code, kCode15000);
     }
@@ -1660,7 +1660,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     if (r != MAGB_OK) { p2p_recv_fail(out, ctx, r); p2p_cleanup(ctx); return; }
     if (recv_len != sizeof(pattern) || memcmp(recv_payload, pattern, sizeof(pattern)) != 0 ||
             recv_seq != 2U) {
-        result_fail(out, MAGB_ERR_P2P, "BAD PAYLOAD");
+        result_fail(out, MAGB_ERR_P2P, "BAD PAYLD");
         p2p_cleanup(ctx);
         return;
     }
