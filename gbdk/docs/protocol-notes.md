@@ -753,13 +753,18 @@ from Read Config no matter what. Originally this used a compile-time
 "ISP PASSWORD" main-menu entry (`ui_edit_text()` in `src/app/ui.c`, a
 character-cycling text editor modeled on the existing P2P-number
 digit editor) that edits a session-wide RAM buffer
-(`isp_password[]` in `main.c`, seeded from `TEST_ISP_PASSWORD`) used
-by every ISP-touching test. This still needed no mapper/save: the
-buffer is plain RAM, reset to the compile-time default on power-off,
-and this TestSuite's cartridge type stayed `0x00` (ROM ONLY, no MBC,
-no battery-backed SRAM). A real MBC with save RAM (e.g.
-MBC5+RAM+BATTERY) would only be needed if the password had to survive
-a power cycle, which was never asked for.
+(`isp_password[]` in `main.c`) used by every ISP-touching test. It
+starts EMPTY — there is deliberately no `TEST_ISP_PASSWORD` default,
+because a guessed placeholder hid every real 401/`-ERR` behind a
+confusing symptom for a full day; tests that actually authenticate now
+refuse to run at all (`require_password()`) rather than send something
+made up.
+
+The buffer is plain RAM and resets on power-off. The ROM does now
+carry a mapper (MBC5, cartridge type `0x19`) — but for **code space**,
+not for saves, and it has no cart RAM or battery. See "ROM banking"
+below. If the password ever had to survive a power cycle that would be
+a separate change (MBC5+RAM+BATTERY), and it has never been asked for.
 
 ## P2P: direct-IP dialing and relay-based calls are different mechanisms
 
@@ -905,3 +910,61 @@ sequence this document describes above, which is the 8-bit sequence
 real GBC hardware and libmobile's 8-bit path implement. This TestSuite
 never sends `MAGB_CMD_SIO32` and never switches out of 8-bit
 `SIOF_SPEED_32X` GBC serial mode.
+
+## ROM banking (MBC5), and the two traps that come with it
+
+Not protocol, but it constrains where protocol code may live, and both
+failure modes below are silent at build time and fatal at runtime.
+
+The GBDK ROM was mapperless (cartridge type `0x00`, 32 KiB) until the
+BIG BUFFER test needed roughly 4 KiB more than the 826 bytes left. It
+is now **MBC5, cartridge type `0x19`, no cart RAM and no battery** —
+the mapper is there for code space only, not for saves.
+
+MBC1/MBC2/MBC3/MBC5 were all checked against the installed `bankpack`
+before choosing (bank ceilings 127 excluding `0x20`/`0x40`/`0x60`, 15,
+127 and 255 respectively). MBC5 is the one documented as guaranteed to
+work in CGB double-speed mode, which this ROM runs in — that decided
+it. MBC3 would also have fit and has Pokémon Crystal as precedent.
+
+Exactly **one** translation unit is banked: `src/app/gb00_auth.c`
+(`#pragma bank 255`, ~5 KiB of MD5/base64/GB00 code), chosen because it
+is nearly self-contained and sits at the leaf of the call graph. Its
+four exported functions carry `BANKED` on **both** prototype and
+definition; a mismatch there compiles cleanly and jumps into the wrong
+bank at runtime. An earlier, much wider `-autobank` attempt that let
+bankpack scatter modules across banks without those annotations built
+fine and hung on a blank screen; it was reverted.
+
+The two traps, both of which bit this ROM and are now covered by
+`make check-banking`:
+
+1. **The non-banked code does not fit in bank 0.** It is ~30 KiB, so
+   the linker lays `_CODE` out flat across banks 0 *and* 1. That works
+   only because MBC5 maps bank 1 at reset and we normally never leave
+   it — but it means everything above `0x3FFF` is displaced for as long
+   as a banked module is mapped in. "Non-banked" here does **not** mean
+   "always reachable".
+
+2. **The bank trampoline was itself in the switchable window.** GBDK
+   emits `_CODE` before `_HOME`, which placed `___sdcc_bcall_ehl` at
+   `0x76E1`. The instant it wrote bank 2 to the MBC5 register it
+   unmapped itself, and the CPU carried on executing whatever
+   `gb00_auth` happened to have at that address. Fixed by pinning
+   `-Wl-b_HOME=0x0200` and starting `-Wl-b_CODE=0x0C00` after it, which
+   puts the trampoline at `0x097C`.
+
+Consequently `gb00_auth.c` calls **nothing** outside its own bank — it
+carries local copies of `memcpy`/`strlen` rather than `<string.h>`'s,
+which the linker had placed at `0x6DF2` and `0x7732`. Interrupts are
+fine as-is: the `0x40`/`0x48` vectors dispatch into crt0 code below
+`0x1000`, and the serial IRQ is unused (this ROM polls `SC_REG`), so no
+ISR path is ever unmapped.
+
+`make check-banking` fails the build if the trampoline lands at or
+above `0x4000`, or if `gb00_auth.c` gains any external reference other
+than the trampoline. `bankpack` is pinned with `-Wb-min=2` so banked
+modules never land in bank 1, where the flat `_CODE` already lives.
+
+The RGBDS ROM needs none of this — it is hand-written assembly with
+~12.6 KiB still free in ROMX bank 1 and no mapper change.

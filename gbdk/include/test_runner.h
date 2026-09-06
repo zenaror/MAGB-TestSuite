@@ -64,6 +64,19 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
  * already exercises the same fetch on its way to the article.) */
 void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *password);
 
+/** The "BIG BUFFER" test: same GB00 challenge/response auth as NEWS
+ * ARTICLE, but against REON's dedicated MAGBTEST fixture instead of a
+ * real title's endpoint -- downloads TEST_BIGBUFFER_SIZE bytes
+ * (TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH), verifying it via a running
+ * 16-bit additive checksum streamed against the response's
+ * `X-Test-Checksum` header (never buffering more than one Transfer
+ * Data chunk of the body at a time), then uploads the same
+ * deterministic pattern back (TEST_HTTP_BIGBUFFER_UPLOAD_PATH,
+ * generated on the fly rather than stored) and checks the server's
+ * own pass/fail response byte. Each leg gets its own GB00 challenge/
+ * response, one ISP session for both. */
+void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *password);
+
 /** Test 2b: Begin Session, Read Configuration to find the adapter's
  * own configured login ID, dial string, email address and SMTP server,
  * Dial ISP, ISP Login (with `password`), DNS, TCP Open (port 25), a

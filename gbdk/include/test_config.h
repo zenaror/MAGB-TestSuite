@@ -123,6 +123,25 @@
 #define TEST_HTTP_NEWS_CONFIG_PATH "/cgb/download?name=/01/CGB-BXTJ/news/config.php"
 #define TEST_HTTP_NEWS_PATH        "/cgb/download?name=/01/CGB-BXTJ/news/100.news.php"
 
+/* REON's dedicated "BIG BUFFER" stress-test fixture -- unlike every
+ * other path above, this is NOT a real licensed title's endpoint
+ * (deliberately not a "CGB-XXXX-NN"-shaped folder, since that format
+ * is reserved for real cartridges; see repo-root CLAUDE.md's "This is
+ * NOT a Pokémon Crystal clone and must not contain Pokémon-specific
+ * game code"). Added specifically to exercise a body (TEST_BIGBUFFER_
+ * SIZE bytes) far larger than any single Transfer Data (0x15)
+ * response and any buffer this mapperless, no-SRAM ROM could hold at
+ * once -- see gb00_stream_request()/test_isp_big_buffer() in
+ * test_runner.c for how that's verified (a running 16-bit additive
+ * checksum computed while streaming, never buffered in full). Same
+ * GB00 challenge/response auth (REON's doAuth()) and host as News/
+ * Tamago above, relayed cross-session while implementing this test,
+ * not independently confirmed against REON's PHP source the way the
+ * paths above were. */
+#define TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH "/cgb/download?name=/01/MAGBTEST/0.bigbuffer.cgb"
+#define TEST_HTTP_BIGBUFFER_UPLOAD_PATH   "/cgb/upload?name=/01/MAGBTEST/0.bigbuffer.cgb"
+#define TEST_BIGBUFFER_SIZE 8192U
+
 /* Mobile Trainer's real home page -- Dan Docs' "Mobile Trainer"
  * section documents this exact observed URL
  * (http://gameboy.datacenter.ne.jp/01/CGB-B9AJ/index.html,
