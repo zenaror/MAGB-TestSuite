@@ -71,18 +71,19 @@ void main(void)
             static const char *const kIspLabels[] = {
                 "TAMAGO EGG",
                 "NEWS ARTICLE",
+                "BIG BUFFER",
                 "TRAINER HOME",
                 "EMAIL SEND",
                 "EMAIL RECV",
                 "RAW TCP(NC)"
             };
-            #define ISP_SUBMENU_COUNT 6U
+            #define ISP_SUBMENU_COUNT 7U
             uint8_t choice = ui_select_submenu("ISP/HTTP", kIspLabels, ISP_SUBMENU_COUNT);
 
             /* Shared "TESTING..." for every choice that actually runs a
              * test_result_t-based test (everything except Raw TCP,
              * which draws its own screen, and "cancelled") -- one call
-             * site instead of five identical ones. (Reusing kIspLabels[]
+             * site instead of six identical ones. (Reusing kIspLabels[]
              * for the ui_show_result() titles below, instead of the
              * literals each case already has, was tried and measurably
              * cost *more* code than the duplicate strings it removed --
@@ -90,7 +91,7 @@ void main(void)
              * for a `const char *const[]` is not cheap here even
              * computed once. Plain literals below are the smaller
              * option in practice, not just in theory.) */
-            if (choice < 5U) {
+            if (choice < 6U) {
                 ui_show_testing(false);
             }
             switch (choice) {
@@ -103,18 +104,22 @@ void main(void)
                 ui_show_result("NEWS ARTICLE", &result);
                 break;
             case 2U:
+                test_isp_big_buffer(&ctx, &result, isp_password);
+                ui_show_result("BIG BUFFER", &result);
+                break;
+            case 3U:
                 test_isp_http(&ctx, &result, isp_password, TEST_HTTP_TRAINER_HOME_HOST, TEST_HTTP_TRAINER_HOME_PORT, TEST_HTTP_TRAINER_HOME_PATH);
                 ui_show_result("TRAINER HOME", &result);
                 break;
-            case 3U:
+            case 4U:
                 test_isp_email_send(&ctx, &result, isp_password);
                 ui_show_result("EMAIL SEND", &result);
                 break;
-            case 4U:
+            case 5U:
                 test_isp_email_recv(&ctx, &result, isp_password);
                 ui_show_result("EMAIL RECV", &result);
                 break;
-            case 5U:
+            case 6U:
                 /* No password needed (libmobile doesn't validate ISP
                  * Login credentials, and there is no auth step in a
                  * raw TCP session) -- only the target IP is editable

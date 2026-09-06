@@ -24,18 +24,47 @@
 
 #include <stdint.h>
 
+/* This translation unit lives in its own auto-assigned ROM bank (see
+ * gb00_auth.c's `#pragma bank 255` and the Makefile's MBC5/-autobank
+ * flags), so every function below is called across a bank boundary and
+ * must carry GBDK's BANKED marker on BOTH the prototype and the
+ * definition -- a mismatch compiles cleanly and then jumps into the
+ * wrong bank at runtime, which is exactly how the previous, much wider
+ * banking attempt failed (see the Makefile's own note).
+ *
+ * Nothing else in this ROM is banked, but do NOT read that as "calls
+ * out of gb00_auth are automatically safe". The rest of the ROM does
+ * not fit in bank 0, so its non-banked code is laid out flat across
+ * banks 0 AND 1 -- and everything of it above 0x3FFF is displaced for
+ * exactly as long as this module is mapped in. gb00_auth.c therefore
+ * calls nothing outside itself at all (it carries local copies of
+ * memcpy/strlen rather than <string.h>'s, which landed at 0x6DF2 and
+ * 0x7732), and the Makefile pins the bank trampoline into bank 0.
+ * `make check-banking` enforces both.
+ *
+ * The host-side unit tests (tests/host/, built with the native
+ * compiler) never compile this module, but keep the fallback anyway so
+ * including this header from a host build can't break on an unknown
+ * keyword. */
+#ifdef MAGB_HOST_TEST
+#define GB00_BANKED
+#else
+#include <gbdk/platform.h>
+#define GB00_BANKED BANKED
+#endif
+
 /** Computes the MD5 digest of an arbitrary-length byte string into a
  * 16-byte digest. Single-shot (no streaming API) -- every call site
  * in this TestSuite hashes well under 128 bytes at once. */
-void md5(const uint8_t *msg, uint16_t len, uint8_t digest[16]);
+void md5(const uint8_t *msg, uint16_t len, uint8_t digest[16]) GB00_BANKED;
 
 /** Standard base64 (RFC 4648, '+'/'/' alphabet, '=' padding).
  * base64_encode() writes exactly 4*ceil(len/3) characters plus a NUL
  * terminator to `out` (caller must size accordingly). base64_decode()
  * returns the number of decoded bytes written to `out`, or 0xFFFF on
  * a malformed input. */
-uint16_t base64_encode(const uint8_t *data, uint16_t len, char *out);
-uint16_t base64_decode(const char *in, uint16_t in_len, uint8_t *out);
+uint16_t base64_encode(const uint8_t *data, uint16_t len, char *out) GB00_BANKED;
+uint16_t base64_decode(const char *in, uint16_t in_len, uint8_t *out) GB00_BANKED;
 
 /** GB00_CHALLENGE_LEN: the WWW-Authenticate "name" value is always
  * exactly this many base64 characters (36 raw bytes, 36 % 3 == 0, so
@@ -52,6 +81,6 @@ uint16_t base64_decode(const char *in, uint16_t in_len, uint8_t *out);
  * user via the "ISP PASSWORD" menu -- see main.c). `out` must have
  * room for GB00_AUTHORIZATION_LEN+1 bytes. */
 void gb00_build_authorization(const char *challenge_b64, const char *login,
-                               const char *password, char *out);
+                               const char *password, char *out) GB00_BANKED;
 
 #endif /* GB00_AUTH_H */

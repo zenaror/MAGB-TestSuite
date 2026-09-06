@@ -1,6 +1,54 @@
 #include "gb00_auth.h"
+
+/* Auto-assigned to its own ROM bank by GBDK's bankpack (-autobank in
+ * the Makefile). This is the ONLY banked translation unit in the ROM:
+ * moving this module (~5 KiB of MD5/base64/GB00 code, called from a
+ * handful of places and calling nothing outside itself) out of the
+ * bank 0/1 window the rest of the ROM occupies is what made room for
+ * the BIG BUFFER test without banking anything else. Every function
+ * exported here
+ * carries GB00_BANKED -- see gb00_auth.h for why that matters. */
+#pragma bank 255
 #include <stdbool.h>
-#include <string.h>
+
+/* ---- Self-contained libc substitutes ---------------------------------
+ * This module MUST NOT call anything that lives outside its own bank.
+ * While it runs, the MBC5 window at 0x4000-0x7FFF holds THIS bank, so
+ * every other address in that range temporarily stops being the code it
+ * normally is. The rest of the ROM's non-banked code spans banks 0 AND 1
+ * (see the Makefile), which means most of it -- including GBDK's
+ * <string.h> memcpy/strlen, which the linker placed at 0x6DF2/0x7732 --
+ * is unreachable from here. Calling them compiled and linked cleanly and
+ * would have jumped straight into the middle of this module's own MD5
+ * tables at runtime.
+ *
+ * So: no <string.h>, no libc, nothing external. These two tiny local
+ * copies are all this module needed, and they get banked along with it.
+ * The Makefile's check-banking target enforces that this stays true --
+ * it fails the build if any symbol reachable from here (other than the
+ * bank trampoline, which is pinned into bank 0) ends up above 0x3FFF.
+ * If you add code here that needs another helper, write it locally too
+ * rather than reaching for the library. */
+
+static void gb00_memcpy(void *dst, const void *src, uint16_t len)
+{
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+
+    while (len-- != 0U) {
+        *d++ = *s++;
+    }
+}
+
+static uint8_t gb00_strlen(const char *s)
+{
+    uint8_t n = 0U;
+
+    while (s[n] != '\0') {
+        n++;
+    }
+    return n;
+}
 
 /* ---- MD5 (RFC 1321), compact single-shot implementation --------------
  * Kept deliberately simple/textbook (no unrolled rounds, no lookup-
@@ -72,7 +120,7 @@ static void md5_process_block(uint32_t state[4], const uint8_t block[64])
     state[3] += d;
 }
 
-void md5(const uint8_t *msg, uint16_t len, uint8_t digest[16])
+void md5(const uint8_t *msg, uint16_t len, uint8_t digest[16]) GB00_BANKED
 {
     /* Every call site in this TestSuite hashes a base64 challenge
      * (48 bytes) plus a short password -- comfortably under two
@@ -83,7 +131,7 @@ void md5(const uint8_t *msg, uint16_t len, uint8_t digest[16])
     uint16_t padded_len;
     uint16_t i;
 
-    memcpy(block, msg, len);
+    gb00_memcpy(block, msg, len);
     block[len] = 0x80U;
     padded_len = (uint16_t)(len + 1U);
     while ((padded_len % 64U) != 56U) {
@@ -111,7 +159,7 @@ void md5(const uint8_t *msg, uint16_t len, uint8_t digest[16])
 static const char kB64Alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-uint16_t base64_encode(const uint8_t *data, uint16_t len, char *out)
+uint16_t base64_encode(const uint8_t *data, uint16_t len, char *out) GB00_BANKED
 {
     uint16_t i = 0U;
     uint16_t o = 0U;
@@ -153,7 +201,7 @@ static int8_t b64_value(char c)
     return -1;
 }
 
-uint16_t base64_decode(const char *in, uint16_t in_len, uint8_t *out)
+uint16_t base64_decode(const char *in, uint16_t in_len, uint8_t *out) GB00_BANKED
 {
     uint16_t i = 0U;
     uint16_t o = 0U;
@@ -232,7 +280,7 @@ static uint8_t gb00_rotate_encode(uint8_t x)
 }
 
 void gb00_build_authorization(const char *challenge_b64, const char *login,
-                               const char *password, char *out)
+                               const char *password, char *out) GB00_BANKED
 {
     uint8_t challenge_raw[36];
     uint8_t bits_sorted[36];
@@ -248,14 +296,14 @@ void gb00_build_authorization(const char *challenge_b64, const char *login,
     (void)base64_decode(challenge_b64, GB00_CHALLENGE_LEN, challenge_raw);
     gb00_bits_sorted(challenge_raw, bits_sorted);
 
-    memcpy(md5_input, challenge_b64, GB00_CHALLENGE_LEN);
-    password_len = (uint8_t)strlen(password);
-    memcpy(&md5_input[GB00_CHALLENGE_LEN], password, password_len);
+    gb00_memcpy(md5_input, challenge_b64, GB00_CHALLENGE_LEN);
+    password_len = gb00_strlen(password);
+    gb00_memcpy(&md5_input[GB00_CHALLENGE_LEN], password, password_len);
     md5_input_len = (uint16_t)(GB00_CHALLENGE_LEN + password_len);
     md5(md5_input, md5_input_len, pw_hash);
 
-    memcpy(plaintext, pw_hash, 16U);
-    login_len = (uint8_t)strlen(login);
+    gb00_memcpy(plaintext, pw_hash, 16U);
+    login_len = gb00_strlen(login);
     /* Login ID is right-aligned in its 20-byte field, left-padded with
      * 0xFF -- confirmed necessary (not what the public prose writeup
      * describes) by round-tripping against REON's real decode logic;
@@ -263,7 +311,7 @@ void gb00_build_authorization(const char *challenge_b64, const char *login,
     for (i = 0U; i < (uint8_t)(20U - login_len); i++) {
         plaintext[16U + i] = 0xFFU;
     }
-    memcpy(&plaintext[36U - login_len], login, login_len);
+    gb00_memcpy(&plaintext[36U - login_len], login, login_len);
 
     for (i = 0U; i < 36U; i++) {
         scrambled[i] = gb00_rotate_encode((uint8_t)(plaintext[i] ^ bits_sorted[i]));
