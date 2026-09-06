@@ -44,7 +44,8 @@ SRCS := \
     src/app/text.asm \
     src/app/sound.asm \
     src/app/gb00_auth.asm \
-    src/app/net_extra.asm
+    src/app/net_extra.asm \
+    src/app/big_buffer.asm
 
 OBJS := $(patsubst src/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 
@@ -80,8 +81,12 @@ $(BUILD_DIR)/%.o: src/%.asm $(wildcard $(INCLUDE_DIR)/*.inc) | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	"$(RGBASM)" $(RGBASMFLAGS) -o $@ $<
 
+# -m keeps build/size.map in step with the ROM. It is not a build
+# input, but it is the only place the per-bank free space and the
+# WRAMX layout are visible, and a stale copy is worse than none --
+# it was previously written by hand and had drifted.
 $(ROM): $(OBJS) | $(BUILD_DIR)
-	"$(RGBLINK)" -o $(ROM) $(OBJS)
+	"$(RGBLINK)" -m $(BUILD_DIR)/size.map -o $(ROM) $(OBJS)
 	"$(RGBFIX)" -Cv -j -l 0x33 -p 0xFF -m 0x00 -t "$(ROM_NAME)" $(ROM)
 	@if [ -d "$(EMU_DIR)" ]; then \
 		cp "$(ROM)" "$(EMU_DIR)/"; \

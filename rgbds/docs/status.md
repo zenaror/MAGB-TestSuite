@@ -81,8 +81,8 @@ not implemented.
     `test_adapter_session()` output text exactly: "ADAPTER ID: `<hex>`"
     / "NINTENDO ECHO OK" on success.
   - **ISP/HTTP** (`RunIspHttpMenu`/`ShowIspSubMenu`, Test 2): opens the
-    same 6-item submenu gbdk's `ui_select_submenu()`/`kIspLabels[]` does
-    (same wording/order: Tamago Egg, News Article, Trainer
+    same 7-item submenu gbdk's `ui_select_submenu()`/`kIspLabels[]` does
+    (same wording/order: Tamago Egg, News Article, Big Buffer, Trainer
     Home, Email Send, Email Recv, Raw TCP(NC)) -- title row 0, items
     starting row 2, "A:RUN B:BACK" footer, selection resets to item 0
     every time it's entered (unlike the main menu's persisted
@@ -1384,3 +1384,56 @@ project owner's step):
   could. A link-level trace from the adapter side for that exchange
   remains the most useful thing to pair it with, the same way earlier
   GBDK bugs got root-caused (see `gbdk/docs/journal.md`).
+
+## BIG BUFFER (`src/app/big_buffer.asm`)
+
+Port of gbdk's `test_isp_big_buffer()` and the `gb00_stream_*()` engine
+under it. The point of the test is a body an order of magnitude larger
+than anything this ROM can hold: 8192 bytes against a
+`GB00_RESP_BUF_SIZE` of 360.
+
+Download leg: GET the MAGBTEST fixture, take REON's 401, answer it with
+the usual GB00 challenge/response, and stream the body through a running
+16-bit additive checksum — the same algorithm the Mobile Adapter's own
+packet checksum uses — comparing the total against the response's
+`X-Test-Checksum` header. Upload leg: probe with `Content-Length: 0` to
+draw a fresh challenge, then POST the same deterministic pattern
+(`body[i] == i & $FF`, regenerated one chunk at a time, never stored)
+with the download's verified checksum echoed back in its own
+`X-Test-Checksum`; the server's verdict arrives as the first body byte
+(`$01` = accepted).
+
+Notes worth keeping:
+
+- **Byte-identical requests to gbdk's.** Neither GET carries
+  `Connection: close`, because gbdk's GB00 path doesn't send it (HTTP/1.0
+  closes by default). The older News Config/Article blobs in `main.asm`
+  *do* send it and so diverge from gbdk — pre-existing, deliberately left
+  alone rather than changed as a drive-by edit. Verified by extracting
+  the request bytes from both built ROMs and comparing.
+- **The upload's authenticated POST header is 261 bytes**, over the
+  253-byte Transfer Data ceiling, so `BbSendAll` splits it. gbdk hit this
+  as a real bug first: passing 261 to a `uint8_t` length sent the literal
+  `"POST "` and nothing else, then waited for a reply to a request the
+  server never saw.
+- **Buffers live in WRAM bank 1** (`WRAMX`, `$D000`), not WRAM0 — WRAM0
+  was down to ~123 free bytes. Nothing else in this ROM touches WRAMX or
+  writes `rSVBK`, and both `SVBK=0` and `SVBK=1` select bank 1 on CGB, so
+  the region is mapped from power-on with no setup. A second WRAMX user
+  would have to revisit that.
+- **`wGb00RespLen` has to be published before calling into
+  `gb00_auth.asm`.** `Gb00StatusCode` and `Gb00FindChallenge` both read
+  it, but this engine tracks `wBbHeadLen` instead (the body deliberately
+  never lands in `wGb00RespBuf`). `BbStreamContinue` copies it across
+  once, before either helper runs.
+- **`include/gb00.inc`** now holds the shared `GB00_*` sizes. `EXPORT DEF`
+  makes a constant resolvable by the *linker*, but rgbasm assembles each
+  file independently, so a constant used in an `ASSERT` or a `ds` size
+  has to be visible at assembly time — which `big_buffer.asm`'s
+  request-buffer assertions need.
+
+Cost: ~2.5 KiB in `ROMX` bank 1 (10096 still free), ~305 bytes in `ROM0`
+(3051 free), 614 bytes of WRAM bank 1.
+
+Not runtime-verified. Needs a real REON MAGBTEST fixture serving both
+paths; see "Manual tests requested" in the session that added it.

@@ -29,6 +29,7 @@
 
 INCLUDE "hardware.inc"
 INCLUDE "protocol.inc"
+INCLUDE "gb00.inc"
 
 ; ---- MD5 (RFC 1321) ---------------------------------------------------
 ;
@@ -995,9 +996,8 @@ Base64Alphabet:
 ; full derivation. Byte-for-byte ported from gbdk's gb00_bits_sorted()/
 ; gb00_rotate_encode()/gb00_build_authorization(), which were themselves
 ; round-trip-tested against REON's real PHP decode function.
-
-DEF GB00_CHALLENGE_LEN EQU 48
-DEF GB00_AUTHORIZATION_LEN EQU 92
+; The GB00_* sizes it works in terms of live in include/gb00.inc, shared
+; with big_buffer.asm.
 
 SECTION "Gb00 Scratch", WRAM0
 wGb00ChallengePtr: dw
@@ -1462,8 +1462,6 @@ Gb00BuildAuthorization::
 ; one bump behind gbdk's, which is exactly the kind of divergence this
 ; file's own comment above warns against re-deriving a number instead
 ; of copying gbdk's current one.
-DEF GB00_RESP_BUF_SIZE EQU 360
-DEF GB00_MAX_EMPTY_POLLS EQU 5
 ; Comfortably covers the largest real request this ROM builds (News
 ; Article's authenticated retry measures 238 bytes: prefix 122 + the
 ; 92-char Authorization value + a 24-byte suffix -- confirmed by
@@ -1484,10 +1482,10 @@ wGb00FetchStatusText:: ds 4 ; 3 digits + NUL, e.g. "200"
 wGb00FetchDidAuth:: db
 wGb00FetchFailMsgPtr:: dw   ; valid only when Gb00FetchOne returns MAGB_ERR_ISP
 
-wGb00RespBuf: ds GB00_RESP_BUF_SIZE
-wGb00RespLen: dw ; 16-bit: GB00_RESP_BUF_SIZE(360) exceeds a byte's range
+wGb00RespBuf:: ds GB00_RESP_BUF_SIZE
+wGb00RespLen:: dw ; 16-bit: GB00_RESP_BUF_SIZE(360) exceeds a byte's range
 wGb00EmptyPolls: db
-wGb00FetchChallenge: ds GB00_CHALLENGE_LEN ; NOT NUL-terminated, matches
+wGb00FetchChallenge:: ds GB00_CHALLENGE_LEN ; NOT NUL-terminated, matches
                                             ; Gb00BuildAuthorization's HL input
 wGb00AuthReqBuf: ds GB00_AUTH_REQ_BUF_SIZE
 wGb00AuthReqLen: db
@@ -1621,7 +1619,7 @@ sGb00HttpMagic: db "HTTP/" ; compared by fixed 5-byte count, no NUL needed
 ; Output: A = 1 on success (wGb00FetchStatusText holds the 3 digits,
 ;         NUL-terminated), 0 on failure
 ; Clobbers: everything
-Gb00StatusCode:
+Gb00StatusCode::
     ld a, [wGb00RespLen + 1]
     or a, a
     jr nz, .longEnough ; high byte set -> definitely >= 256 > 12
@@ -1670,7 +1668,7 @@ sGb00Needle: db "WWW-Authenticate:"
 ; Output: A = 1 on success, 0 if not found (or found too close to the
 ;         end of the buffer to hold a full challenge)
 ; Clobbers: everything
-Gb00FindChallenge:
+Gb00FindChallenge::
     ld hl, wGb00RespBuf
     ld a, [wGb00RespLen]
     ld e, a

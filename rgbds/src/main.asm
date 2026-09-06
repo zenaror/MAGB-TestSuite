@@ -2339,20 +2339,22 @@ RunIspHttpCore:
 ; removed once NEWS ARTICLE already exercised that same fetch on its
 ; way to the article, making it redundant (matches gbdk's identical
 ; removal of test_isp_http_gb00()/"NEWS CONFIG").
-DEF ISP_SUBMENU_COUNT EQU 6
+DEF ISP_SUBMENU_COUNT EQU 7
 
-IspSubMenuItemAddrs: ; rows 2-7, column 0 (cursor); matches gotoxy(0, 2+i)
+IspSubMenuItemAddrs: ; rows 2-8, column 0 (cursor); matches gotoxy(0, 2+i)
     dw $9840
     dw $9860
     dw $9880
     dw $98A0
     dw $98C0
     dw $98E0
+    dw $9900
 
 ; Exact wording/order matches gbdk's kIspLabels[] in src/main.c.
 IspSubMenuLabels:
     dw sSubTamagoEgg
     dw sSubNewsArticle
+    dw sSubBigBuffer
     dw sSubTrainerHome
     dw sSubEmailSend
     dw sSubEmailRecv
@@ -2361,6 +2363,7 @@ IspSubMenuLabels:
 IspSubMenuHandlers:
     dw RunTamagoEggTest
     dw RunNewsArticleTest
+    dw RunBigBufferTest
     dw RunTrainerHomeTest
     dw RunEmailSendTest
     dw RunEmailRecvTest
@@ -2368,6 +2371,7 @@ IspSubMenuHandlers:
 
 sSubTamagoEgg:   db "TAMAGO EGG", 0
 sSubNewsArticle: db "NEWS ARTICLE", 0
+sSubBigBuffer:   db "BIG BUFFER", 0
 sSubTrainerHome: db "TRAINER HOME", 0
 sSubEmailSend:   db "EMAIL SEND", 0
 sSubEmailRecv:   db "EMAIL RECV", 0
@@ -2687,6 +2691,162 @@ RunNewsArticleTest:
     pop af
     call PrintErrorCode
     jp WaitForBackButton
+
+; ---- BIG BUFFER (streamed download + upload round-trip) -----------------
+;
+; Session/dial/login/DNS wrapper around big_buffer.asm's BbRunTransfer,
+; matching gbdk's test_isp_big_buffer(). The two HTTP legs, their GB00
+; challenge/response retries and the streaming checksum all live in
+; big_buffer.asm (ROMX) -- only this thin orchestration is in ROM0,
+; which is nearly full.
+;
+; Like NEWS ARTICLE and EMAIL RECV, this authenticates for real, so it
+; refuses to run at all without an ISP PASSWORD rather than sending a
+; guessed one (see wIspPassword's own note).
+; Clobbers: everything
+RunBigBufferTest:
+    call ClearTextScreen
+    ld hl, sSubBigBuffer
+    ld de, $9801
+    call PrintString
+
+    ld a, [wIspPassword]
+    or a, a
+    jp z, .noPassword
+
+    ld a, CMD_SESSION
+    call SetCommand
+    ld a, STATUS_WAKE
+    call SetStatus
+    call MagbBeginSession
+    or a, a
+    jp nz, .showFail
+
+    ld a, CMD_READ_ID
+    call SetCommand
+    call ReadIdentity
+    or a, a
+    jp nz, .showFail
+
+    ld a, CMD_DIAL
+    call SetCommand
+    ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
+    ld [wExecTimeoutFrames], a
+    ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
+    ld [wExecTimeoutFrames + 1], a
+    ld hl, wIdentityPhone
+    call MagbDial
+    or a, a
+    jp nz, .showFail
+
+    ld a, CMD_ISP_LOGIN
+    call SetCommand
+    call BuildIspLoginPayload
+    call MagbIspLogin
+    or a, a
+    jp nz, .showFail
+
+    ld a, CMD_DNS
+    call SetCommand
+    ld hl, sDnsHostname
+    ld b, sDnsHostnameEnd - sDnsHostname
+    call MagbDnsQuery
+    or a, a
+    jp nz, .showFail
+
+    ld a, CMD_HTTP
+    call SetCommand
+    call BbRunTransfer
+    or a, a
+    jp nz, .transferFail
+
+    ; Success: tear the session down, then show both detail lines.
+    ld a, CMD_ISP_LOGOUT
+    call SetCommand
+    call MagbIspLogout
+    ld a, CMD_HANGUP
+    call SetCommand
+    call MagbHangup
+    ld a, CMD_END_SESSION
+    call SetCommand
+    call MagbEndSession
+
+    call SoundSuccess
+    ld hl, sPass
+    ld de, RESULT_ADDR
+    call PrintString
+    call ShowBigBufferDetails
+    jp WaitForBackButton
+
+; BbRunTransfer already closed whatever TCP connection it had open on
+; every one of its exit paths; the ISP session around it is still up and
+; is torn down here, same best-effort shape as the other ISP tests.
+.transferFail
+    push af
+    call MagbIspLogout
+    call MagbHangup
+    call MagbEndSession
+    call SoundError
+    ld hl, sFail
+    ld de, RESULT_ADDR
+    call PrintString
+    pop af
+    cp a, MAGB_ERR_ISP
+    jr nz, .transferProtoFail
+    ; App-level failure: BbRunTransfer's own message is more specific
+    ; than any protocol error code would be.
+    ld a, [wBbFailMsgPtr]
+    ld l, a
+    ld a, [wBbFailMsgPtr + 1]
+    ld h, a
+    ld de, ERROR_ADDR
+    call PrintString
+    call ShowBigBufferDetails
+    jp WaitForBackButton
+.transferProtoFail
+    call PrintErrorCode
+    call ShowBigBufferDetails
+    jp WaitForBackButton
+
+.noPassword
+    call SoundError
+    ld hl, sFail
+    ld de, RESULT_ADDR
+    call PrintString
+    ld hl, sSetIspPassword
+    ld de, ERROR_ADDR
+    call PrintString
+    jp WaitForBackButton
+
+.showFail
+    push af
+    call SoundError
+    ld hl, sFail
+    ld de, RESULT_ADDR
+    call PrintString
+    pop af
+    call PrintErrorCode
+    jp WaitForBackButton
+
+; Prints BbRunTransfer's two summary lines (empty ones are skipped, so a
+; failure before the download finished doesn't leave a stray blank row).
+; Clobbers: everything
+ShowBigBufferDetails:
+    ld a, [wBbDetail0]
+    or a, a
+    jr z, .detail1
+    ld hl, wBbDetail0
+    ld de, HTTP_ADDR
+    call PrintString
+.detail1
+    ld a, [wBbDetail1]
+    or a, a
+    ret z
+    ld hl, wBbDetail1
+    ld de, DETAIL2_ADDR
+    jp PrintString
+
+DEF DETAIL2_ADDR EQU $98E1 ; row 7, col 1 -- below ERROR_ADDR's row 6
 
 ; ---- Email Send (SMTP, port 25) -----------------------------------------
 ;
@@ -5028,10 +5188,10 @@ SECTION "ISP Password State", WRAM0
 ; real hardware, but SerialHwInit's own xor-a/ld-[wSysTime] pattern
 ; doesn't extend to every WRAM byte in the ROM, so this needs its own
 ; explicit init. Zeroed once by EntryPoint alongside wMenuSelected.
-wIspPassword: ds ISP_PASSWORD_MAX_LEN + 1
+wIspPassword:: ds ISP_PASSWORD_MAX_LEN + 1
 
 SECTION "Isp Identity Scratch", WRAM0
-wIdentityLogin: ds MAGB_CONFIG_LOGIN_ID_LEN + 1
+wIdentityLogin:: ds MAGB_CONFIG_LOGIN_ID_LEN + 1
 wIdentityPhone: ds 17 ; MagbConfigDecodePhone's own worst case: 16 digits/symbols + NUL
 wIdentityEmail: ds MAGB_CONFIG_EMAIL_LEN + 1
 wIdentitySmtp:  ds MAGB_CONFIG_SMTP_LEN + 1
