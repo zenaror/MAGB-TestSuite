@@ -60,25 +60,76 @@ CFLAGS_EXTRA ?=
 #   -Wm-yC     mark the ROM as CGB-only (header byte 0x143 = 0xC0)
 #   -Wm-yn"..."  set the cartridge title
 #
-# Tried -Wm-yt0x19 -Wm-yoA -autobank (MBC5 + GBDK's automatic bank
-# assignment, matching examples/gb/hblank_copy) to fit the on-screen
-# keyboard added for password/IP entry once the ROM outgrew 32 KiB.
-# The ROM built and reported the right header bytes, but hung at a
-# blank screen at runtime -- this project's call graph (main -> ui ->
-# test_runner -> magb_network -> magb_session, deep and mutual across
-# many files) is a much harder automatic-banking case than a
-# scene-by-scene asset viewer, and diagnosing/annotating every
-# cross-bank call correctly (SDCC needs functions actually called
-# across a bank boundary marked BANKED explicitly; autobank alone does
-# not guarantee every call site gets a correct far-call) was judged too
-# large and too risky a change to make good on this session, given a
-# real user testing on real hardware. Reverted; the ROM stays
-# single-bank/no-mapper (32 KiB) and the code that didn't fit was
-# trimmed instead -- see docs/protocol-notes.md if this needs
-# revisiting once the ROM grows again.
-LCCFLAGS := -msm83:gb -Wm-yC -Wm-yn"$(ROM_NAME)" -I$(INCLUDE_DIR) $(CFLAGS_EXTRA)
+#   -Wl-yt0x19   cartridge type MBC5, no cart RAM (header byte 0x147)
+#   -Wm-yoA      let bankpack size the ROM (auto bank count)
+#   -autobank    run bankpack to assign `#pragma bank 255` areas
+#
+# BANKING (MBC5), and why it is deliberately kept this narrow:
+#
+# An earlier attempt turned -autobank on and let bankpack scatter this
+# project's modules across banks. It built and reported the right
+# header bytes, but hung on a blank screen at runtime: the call graph
+# here (main -> ui -> test_runner -> magb_network -> magb_session,
+# deep and mutual across many files) is a much harder automatic-banking
+# case than a scene-by-scene asset viewer, and autobank alone does NOT
+# guarantee every cross-bank call site gets a correct far-call -- SDCC
+# needs each function actually called across a bank boundary marked
+# BANKED explicitly, on both prototype and definition. That attempt was
+# reverted and the ROM stayed single-bank/no-mapper (32 KiB).
+#
+# What is different now: exactly ONE translation unit is banked,
+# src/app/gb00_auth.c (`#pragma bank 255`, ~5 KiB of MD5/base64/GB00
+# code). It exports four functions, all marked GB00_BANKED on both
+# sides, and it calls nothing outside itself -- so there is exactly one
+# kind of cross-bank edge in the whole ROM, and it is annotated. Every
+# other module stays in the always-mapped bank 0/1 window exactly as
+# before, which is what keeps calls *out of* the banked module (and all
+# existing call paths) safe without any further annotation.
+#
+# That one move freed ~5 KiB in the fixed window -- enough to fit the
+# BIG BUFFER test (~4 KiB), which did not fit at 32 KiB. Bank 2 has
+# ~11 KiB left for future growth; if a second module ever needs
+# banking, annotate it the same way rather than widening -autobank's
+# reach across the existing call graph.
+#
+# Two flags below are load-bearing for that to actually work at
+# runtime, both for the same underlying reason: this ROM's non-banked
+# code (~30 KiB) does not fit in bank 0, so the linker lays `_CODE` out
+# FLAT across the whole 0x0000-0x7FFF window -- banks 0 AND 1. That is
+# fine on its own (bank 1 is what MBC5 maps at reset and we never leave
+# it), but it means anything living above 0x3FFF temporarily ceases to
+# exist for as long as the banked module is mapped in.
+#
+#   -Wb-min=2
+#     bankpack defaults to handing out bank 1 first -- physically the
+#     same ROM the flat `_CODE` already occupies. That produced
+#     "Multiple write ... Possible overflow from Bank 0 into Bank 1"
+#     and would have corrupted both. Banked modules start at bank 2.
+#
+#   -Wl-b_HOME=0x0200 -Wl-b_CODE=0x0C00
+#     `_HOME` holds ___sdcc_bcall_ehl, the trampoline that performs the
+#     bank switch and the far call. By default the linker emits `_CODE`
+#     first and `_HOME` after it, which put the trampoline at 0x76E1 --
+#     inside the switchable window, so the instant it wrote bank 2 to
+#     the MBC5 register it unmapped ITSELF and the CPU carried on
+#     executing whatever gb00_auth happened to have at that address.
+#     Pinning `_HOME` to 0x0200 and starting `_CODE` after it keeps the
+#     trampoline (and everything else in _HOME) in bank 0. 0x0C00 leaves
+#     _HOME room to grow; if it ever outgrows that the linker overlaps
+#     the two areas, so `make check-banking` verifies the result rather
+#     than trusting the constant.
+#
+# The same reasoning is why src/app/gb00_auth.c calls NOTHING external
+# -- it has local copies of memcpy/strlen instead of <string.h>'s,
+# which the linker placed at 0x6DF2/0x7732. See that file's header
+# comment. Interrupt handlers are fine as-is: the 0x40/0x48 vectors
+# dispatch into crt0 code below 0x1000 and the serial IRQ is unused
+# (this ROM polls SC_REG), so nothing in an ISR path is ever unmapped.
+LCCFLAGS := -msm83:gb -Wm-yC -Wl-yt0x19 -Wm-yoA -autobank -Wb-ext=.rel -Wb-min=2 \
+            -Wl-b_HOME=0x0200 -Wl-b_CODE=0x0C00 \
+            -Wm-yn"$(ROM_NAME)" -I$(INCLUDE_DIR) $(CFLAGS_EXTRA)
 
-.PHONY: all clean test toolchain-check
+.PHONY: all clean test toolchain-check check-banking
 
 all: toolchain-check $(ROM)
 
@@ -115,6 +166,46 @@ $(BUILD_DIR)/test_config: tests/host/test_config.c src/protocol/magb_config.c | 
 	$(CC) -Wall -Wextra -I$(INCLUDE_DIR) -DMAGB_HOST_TEST \
 	    tests/host/test_config.c src/protocol/magb_config.c \
 	    -o $@
+
+# Verifies the two runtime invariants the MBC5 banking note above
+# depends on. Both are silent at build time and fatal at runtime, and
+# both are one careless edit away, so check them mechanically rather
+# than by reading the map file by hand:
+#
+#   1. ___sdcc_bcall_ehl (the bank-switch trampoline) must live below
+#      0x4000, or it unmaps itself mid-switch.
+#   2. src/app/gb00_auth.c, the one banked module, must reference no
+#      external symbol other than that trampoline -- anything else it
+#      calls would be in the flat _CODE area that bank 2 displaces.
+#
+# This needs a -debug build for the .noi symbol file, so it builds into
+# a scratch directory rather than disturbing $(ROM).
+check-banking: toolchain-check | $(BUILD_DIR)
+	@rm -rf $(BUILD_DIR)/bankcheck && mkdir -p $(BUILD_DIR)/bankcheck
+	@$(LCC) $(LCCFLAGS) -debug -o $(BUILD_DIR)/bankcheck/rom.gbc $(SRCS)
+	@addr=$$(sed -n 's/^DEF ___sdcc_bcall_ehl 0x\([0-9A-Fa-f]*\).*/\1/p' \
+	    $(BUILD_DIR)/bankcheck/rom.noi); \
+	if [ -z "$$addr" ]; then \
+	    echo "check-banking: FAIL - ___sdcc_bcall_ehl not found in .noi"; exit 1; \
+	fi; \
+	if [ $$((0x$$addr)) -ge 16384 ]; then \
+	    echo "check-banking: FAIL - trampoline at 0x$$addr is above 0x3FFF;"; \
+	    echo "  it would unmap itself on every banked call. See LCCFLAGS."; \
+	    exit 1; \
+	fi; \
+	echo "check-banking: trampoline at 0x$$addr (bank 0) OK"
+	@$(LCC) -msm83:gb -I$(INCLUDE_DIR) -c \
+	    -o $(BUILD_DIR)/bankcheck/gb00_auth.rel src/app/gb00_auth.c
+	@extern=$$(grep '^S ' $(BUILD_DIR)/bankcheck/gb00_auth.rel \
+	    | grep 'Ref' | awk '{print $$2}' | grep -v '^___sdcc_bcall_ehl$$' || true); \
+	if [ -n "$$extern" ]; then \
+	    echo "check-banking: FAIL - banked gb00_auth.c references external symbols:"; \
+	    echo "$$extern" | sed 's/^/  /'; \
+	    echo "  These live in the flat _CODE area that bank 2 displaces."; \
+	    echo "  Add local copies inside gb00_auth.c instead."; \
+	    exit 1; \
+	fi; \
+	echo "check-banking: gb00_auth.c is self-contained OK"
 
 clean:
 	rm -rf $(BUILD_DIR)

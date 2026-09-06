@@ -754,6 +754,442 @@ void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *
     sprintf(out->official_code, "32-%s", art_status);
 }
 
+/* ---- "BIG BUFFER": GB00-authenticated download/upload of a body far
+ * larger than any buffer this mapperless, no-SRAM ROM could hold at
+ * once ------------------------------------------------------------- */
+
+/* Caps the body-streaming poll loop in gb00_stream_continue() below --
+ * TEST_BIGBUFFER_SIZE(8192) bytes at up to 254 bytes/poll needs at
+ * least ~33 polls; this leaves generous margin for real-world chunks
+ * smaller than the protocol maximum. Every poll still has its own
+ * MAGB_TIMEOUT_FRAMES_LONG bound, so this is a real, finite ceiling on
+ * the whole operation, not an unbounded wait. */
+#define BIG_BUFFER_MAX_BODY_POLLS 128U
+#define TEST_BIGBUFFER_UPLOAD_CHUNK 253U /* <= MAGB_MAX_PAYLOAD-1 (conn_id byte) */
+
+typedef struct {
+    uint16_t head_len;     /* bytes of status+headers sitting in s_gb00_resp */
+    uint16_t body_len;     /* body bytes streamed so far (never all held at once) */
+    uint8_t first_body_byte;
+    uint16_t computed_checksum;
+    uint16_t expected_checksum;
+    bool checksum_present;
+} gb00_stream_result_t;
+
+/* Sends raw bytes over `conn_id`, discarding whatever comes back --
+ * unlike tcp_send_line() (email/POP3), this takes an explicit length
+ * rather than strlen()'ing a C string, since the upload body is
+ * arbitrary binary data (the deterministic pattern legitimately
+ * contains 0x00 bytes: every 256th byte of `position & 0xFF`) -- see
+ * repo-root CLAUDE.md's "Binary Data" section. Discarding the response
+ * here is safe specifically because HTTP/1.0 servers don't reply
+ * mid-request (unlike POP3's line-at-a-time exchange -- see
+ * tcp_send_line()'s own history in this file): REON's PHP always waits
+ * for the full Content-Length body before responding, so nothing
+ * meaningful can arrive bundled with one of these intermediate sends. */
+static magb_result_t tcp_send_raw(magb_context_t *ctx, uint8_t conn_id,
+                                   const uint8_t *data, uint8_t len)
+{
+    uint8_t discard[1];
+    uint8_t got_len;
+    bool remote_closed;
+    return magb_transfer_data(ctx, conn_id, data, len, discard, 0U,
+                               &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
+}
+
+/* tcp_send_raw() for anything that can exceed one Transfer Data payload,
+ * splitting it across as many sends as it takes.
+ *
+ * This is not hypothetical headroom: the upload leg's authenticated POST
+ * header measures 261 bytes (61 request line + 32 Host + 121
+ * Authorization + 22 Content-Length + 23 X-Test-Checksum + 2 blank
+ * line), and passing that straight to tcp_send_raw() truncated the
+ * length to `(uint8_t)261 == 5` -- it sent the literal "POST " and
+ * nothing else, then waited for a response to a request the server
+ * never saw. Every caller that builds a request whose length is not
+ * provably under TEST_BIGBUFFER_UPLOAD_CHUNK must come through here. */
+static magb_result_t tcp_send_all(magb_context_t *ctx, uint8_t conn_id,
+                                   const uint8_t *data, uint16_t len)
+{
+    uint16_t sent = 0U;
+
+    while (sent < len) {
+        uint16_t remaining = (uint16_t)(len - sent);
+        uint8_t chunk_len = (remaining > TEST_BIGBUFFER_UPLOAD_CHUNK)
+                             ? (uint8_t)TEST_BIGBUFFER_UPLOAD_CHUNK : (uint8_t)remaining;
+        magb_result_t r = tcp_send_raw(ctx, conn_id, &data[sent], chunk_len);
+        if (r != MAGB_OK) {
+            return r;
+        }
+        sent = (uint16_t)(sent + chunk_len);
+    }
+    return MAGB_OK;
+}
+
+/* Finds `needle` (e.g. "X-Test-Checksum:") in an accumulated header
+ * block and parses the 4 hex digits right after it (leading spaces
+ * skipped, upper/lowercase both accepted) into `*out_value`. Returns
+ * false if the header is missing or isn't followed by exactly 4 valid
+ * hex digits -- never guesses a value. */
+static bool gb00_find_hex_header(const uint8_t *resp, uint16_t resp_len,
+                                  const char *needle, uint16_t *out_value)
+{
+    uint8_t needle_len = (uint8_t)strlen(needle);
+    uint16_t i;
+
+    for (i = 0U; (uint16_t)(i + needle_len) < resp_len; i++) {
+        if (memcmp(&resp[i], needle, needle_len) == 0) {
+            uint16_t j = (uint16_t)(i + needle_len);
+            uint16_t value = 0U;
+            uint8_t digits;
+
+            while (j < resp_len && resp[j] == ' ') {
+                j++;
+            }
+            for (digits = 0U; digits < 4U; digits++) {
+                uint8_t c;
+                uint8_t nibble;
+                if (j >= resp_len) {
+                    return false;
+                }
+                c = resp[j];
+                if (c >= '0' && c <= '9') {
+                    nibble = (uint8_t)(c - '0');
+                } else if (c >= 'A' && c <= 'F') {
+                    nibble = (uint8_t)(c - 'A' + 10U);
+                } else if (c >= 'a' && c <= 'f') {
+                    nibble = (uint8_t)(c - 'a' + 10U);
+                } else {
+                    return false;
+                }
+                value = (uint16_t)((value << 4) | nibble);
+                j++;
+            }
+            *out_value = value;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Finds the blank line ("\r\n\r\n") that ends an HTTP header block.
+ * Returns the offset of the first body byte, or 0xFFFF if the
+ * separator isn't present in what's been accumulated so far. */
+static uint16_t gb00_find_body_start(const uint8_t *resp, uint16_t resp_len)
+{
+    uint16_t i;
+    for (i = 0U; (uint16_t)(i + 4U) <= resp_len; i++) {
+        if (resp[i] == '\r' && resp[i + 1U] == '\n' && resp[i + 2U] == '\r' && resp[i + 3U] == '\n') {
+            return (uint16_t)(i + 4U);
+        }
+    }
+    return 0xFFFFU;
+}
+
+/* Shared engine behind gb00_stream_request()/gb00_stream_recv() below:
+ * assumes `res->head_len` bytes are ALREADY sitting in s_gb00_resp
+ * (from whatever got the connection to this point) and `remote_closed`
+ * reflects the connection's state as of that same read. Keeps polling
+ * (reusing s_gb00_resp as pure scratch, one chunk at a time) until the
+ * header/body separator is found, parses the status code and the
+ * optional `X-Test-Checksum` header, then streams every remaining
+ * body byte through a running 16-bit additive checksum (the same
+ * algorithm this protocol's own packet checksum uses, see
+ * docs/protocol-notes.md) instead of ever buffering the body in full
+ * -- the entire reason this exists alongside gb00_fetch()/
+ * gb00_http_get() above is a body (TEST_BIGBUFFER_SIZE) far larger
+ * than GB00_RESP_BUF_SIZE. */
+static magb_result_t gb00_stream_continue(magb_context_t *ctx, uint8_t conn_id,
+                                           bool remote_closed, char status[4],
+                                           gb00_stream_result_t *res,
+                                           const char **fail_stage)
+{
+    magb_result_t r;
+    uint8_t got_len;
+    uint8_t empty_polls = 0U;
+    uint16_t poll;
+    uint16_t i;
+    uint16_t body_start;
+
+    res->body_len = 0U;
+    res->first_body_byte = 0U;
+    res->computed_checksum = 0U;
+    res->checksum_present = false;
+
+    body_start = gb00_find_body_start(s_gb00_resp, res->head_len);
+    while (body_start == 0xFFFFU && !remote_closed && res->head_len < GB00_RESP_BUF_SIZE
+           && empty_polls < HTTP_MAX_EMPTY_POLLS) {
+        uint16_t remaining = (uint16_t)(GB00_RESP_BUF_SIZE - res->head_len);
+        uint8_t cap = (remaining > 255U) ? 255U : (uint8_t)remaining;
+        r = magb_transfer_data(ctx, conn_id, NULL, 0U, &s_gb00_resp[res->head_len], cap,
+                                &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
+        if (r != MAGB_OK) { *fail_stage = "HTTP RECV FAIL"; return r; }
+        empty_polls = (got_len == 0U && !remote_closed) ? (uint8_t)(empty_polls + 1U) : 0U;
+        res->head_len = (uint16_t)(res->head_len + got_len);
+        body_start = gb00_find_body_start(s_gb00_resp, res->head_len);
+    }
+
+    if (!gb00_status_code(s_gb00_resp, res->head_len, status)) {
+        *fail_stage = "NO HTTP/ PREFIX";
+        return MAGB_ERR_ISP;
+    }
+
+    if (body_start == 0xFFFFU) {
+        return MAGB_OK; /* headers-only reply -- nothing to stream */
+    }
+
+    res->checksum_present = gb00_find_hex_header(s_gb00_resp, res->head_len,
+                                                  "X-Test-Checksum:", &res->expected_checksum);
+
+    for (i = body_start; i < res->head_len; i++) {
+        if (res->body_len == 0U) { res->first_body_byte = s_gb00_resp[i]; }
+        res->computed_checksum = (uint16_t)(res->computed_checksum + s_gb00_resp[i]);
+        res->body_len++;
+    }
+
+    empty_polls = 0U;
+    for (poll = 0U; !remote_closed && poll < BIG_BUFFER_MAX_BODY_POLLS
+                    && empty_polls < HTTP_MAX_EMPTY_POLLS; poll++) {
+        r = magb_transfer_data(ctx, conn_id, NULL, 0U, s_gb00_resp, 254U,
+                                &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
+        if (r != MAGB_OK) { *fail_stage = "HTTP RECV FAIL"; return r; }
+        for (i = 0U; i < got_len; i++) {
+            if (res->body_len == 0U) { res->first_body_byte = s_gb00_resp[i]; }
+            res->computed_checksum = (uint16_t)(res->computed_checksum + s_gb00_resp[i]);
+            res->body_len++;
+        }
+        empty_polls = (got_len == 0U && !remote_closed) ? (uint8_t)(empty_polls + 1U) : 0U;
+    }
+
+    return MAGB_OK;
+}
+
+/* Sends `req` (a complete request line + headers, no body -- GET, or
+ * POST with Content-Length: 0) and streams the response exactly like
+ * gb00_stream_continue() documents. `res->head_len` on return lets the
+ * caller reuse s_gb00_resp/gb00_find_challenge() for a 401, exactly
+ * like gb00_fetch() does. */
+static magb_result_t gb00_stream_request(magb_context_t *ctx, uint8_t conn_id,
+                                          const uint8_t *req, uint16_t req_len,
+                                          char status[4], gb00_stream_result_t *res,
+                                          const char **fail_stage)
+{
+    magb_result_t r;
+    bool remote_closed = false;
+    uint8_t got_len;
+    uint16_t head_sent = 0U;
+    uint8_t last_len;
+
+    /* `req_len` is 16-bit and chunked rather than a single uint8_t send:
+     * the requests built here run 96-217 bytes today, but that depends
+     * entirely on TEST_HTTP_HOST and the configured paths, and a longer
+     * host would silently wrap the length instead of failing (which is
+     * exactly what happened on the upload leg -- see tcp_send_all()).
+     * Everything but the final chunk goes out send-only; the last one
+     * carries the receive so the response still lands in s_gb00_resp. */
+    if (req_len > TEST_BIGBUFFER_UPLOAD_CHUNK) {
+        head_sent = (uint16_t)(req_len - TEST_BIGBUFFER_UPLOAD_CHUNK);
+        r = tcp_send_all(ctx, conn_id, req, head_sent);
+        if (r != MAGB_OK) { *fail_stage = "HTTP SEND FAIL"; return r; }
+    }
+    last_len = (uint8_t)(req_len - head_sent);
+
+    r = magb_transfer_data(ctx, conn_id, &req[head_sent], last_len, s_gb00_resp, 255U,
+                            &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
+    if (r != MAGB_OK) { *fail_stage = "HTTP SEND FAIL"; return r; }
+    res->head_len = got_len;
+    return gb00_stream_continue(ctx, conn_id, remote_closed, status, res, fail_stage);
+}
+
+/* Like gb00_stream_request(), but for when the request itself was
+ * already sent in full by the caller (tcp_send_raw(), possibly across
+ * many calls -- the upload leg's multi-chunk body) and all that's left
+ * is to poll for and stream the response. */
+static magb_result_t gb00_stream_recv(magb_context_t *ctx, uint8_t conn_id,
+                                       char status[4], gb00_stream_result_t *res,
+                                       const char **fail_stage)
+{
+    res->head_len = 0U;
+    return gb00_stream_continue(ctx, conn_id, false, status, res, fail_stage);
+}
+
+/* Shared failure path for test_isp_big_buffer() below, once a
+ * connection is open and login has already succeeded: report the
+ * failure, close the connection, then the usual best-effort ISP
+ * Logout/Hang Up/End Session. Every failure site past ISP Login uses
+ * exactly this same cleanup shape, so factoring it here (rather than
+ * repeating 4 lines per site, ~10 sites) is a real code-size win on
+ * this mapperless 32KB cart, not just a style preference. */
+static void bb_fail(magb_context_t *ctx, test_result_t *out, magb_result_t r,
+                     const char *msg, uint8_t conn_id)
+{
+    result_fail_code(out, r, msg, kCode32401);
+    (void)magb_tcp_close(ctx, conn_id);
+    isp_http_cleanup(ctx, 0U, false, true);
+}
+
+/* Shared "we got a 401, now build the Authorization header" step --
+ * used identically by both the download and upload legs below. */
+static bool bb_challenge_auth(uint16_t head_len, const char *login, const char *password,
+                               char *auth_header)
+{
+    char challenge[GB00_CHALLENGE_LEN + 1U];
+    char auth_value[GB00_AUTHORIZATION_LEN + 1U];
+
+    if (!gb00_find_challenge(s_gb00_resp, head_len, challenge)) {
+        return false;
+    }
+    gb00_build_authorization(challenge, login, password, auth_value);
+    sprintf(auth_header, "Authorization: GB00 name=\"%s\"\r\n", auth_value);
+    return true;
+}
+
+void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *password)
+{
+    magb_result_t r;
+    magb_phone_status_t phone;
+    magb_isp_login_result_t isp;
+    magb_isp_identity_t id;
+    uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
+    uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
+    uint8_t host_ip[4];
+    uint8_t conn_id;
+    char status[4];
+    gb00_stream_result_t res;
+    const char *fail_stage;
+    static char auth_header[16U + GB00_AUTHORIZATION_LEN + 4U];
+    static char req[300];
+    static uint8_t chunk[TEST_BIGBUFFER_UPLOAD_CHUNK]; /* static: SDCC's stack-simulated
+                                                          * locals are expensive to index in
+                                                          * a loop at this size -- see
+                                                          * repo-root CLAUDE.md's "Memory
+                                                          * Constraints" (avoid large local
+                                                          * arrays). */
+    uint16_t req_len;
+    uint16_t dl_checksum;
+    uint16_t dl_body_len;
+    uint16_t sent;
+
+    if (!require_password(out, password)) { return; }
+    result_init(out, MAGB_CMD_TRANSFER);
+
+    r = magb_begin_session(ctx);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
+
+    r = read_isp_identity(ctx, &id);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
+
+    r = magb_telephone_status(ctx, &phone);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgPhoneStatusFailed); (void)magb_end_session(ctx); return; }
+
+    r = magb_dial(ctx, id.phone, MAGB_TIMEOUT_FRAMES_LONG);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, kCode20000); (void)magb_end_session(ctx); return; }
+
+    r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, kCode25000); isp_http_cleanup(ctx, 0U, false, false); return; }
+
+    r = magb_dns_query(ctx, TEST_HTTP_HOST, host_ip);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, kCode15000); isp_http_cleanup(ctx, 0U, false, true); return; }
+
+    /* ---- Download: GET, verify via streamed checksum -------------- */
+    r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
+
+    sprintf(req, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n", TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH, TEST_HTTP_HOST);
+    req_len = (uint16_t)strlen(req);
+    r = gb00_stream_request(ctx, conn_id, (const uint8_t *)req, req_len, status, &res, &fail_stage);
+    if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
+
+    if (strncmp(status, "401", 3) == 0) {
+        if (!bb_challenge_auth(res.head_len, id.login, password, auth_header)) {
+            bb_fail(ctx, out, MAGB_ERR_ISP, "NO WWW-AUTH HDR", conn_id);
+            return;
+        }
+        (void)magb_tcp_close(ctx, conn_id);
+        r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
+        if (r != MAGB_OK) { result_fail_code(out, r, "TCP REOPEN FAIL", kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
+
+        sprintf(req, "GET %s HTTP/1.0\r\nHost: %s\r\n%s\r\n",
+                TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH, TEST_HTTP_HOST, auth_header);
+        req_len = (uint16_t)strlen(req);
+        r = gb00_stream_request(ctx, conn_id, (const uint8_t *)req, req_len, status, &res, &fail_stage);
+        if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
+    }
+    (void)magb_tcp_close(ctx, conn_id);
+
+    if (!res.checksum_present || res.computed_checksum != res.expected_checksum) {
+        sprintf(out->detail[0], "%hx%hx!=%hx%hx",
+                (uint8_t)(res.computed_checksum >> 8), (uint8_t)(res.computed_checksum & 0xFFU),
+                (uint8_t)(res.expected_checksum >> 8), (uint8_t)(res.expected_checksum & 0xFFU));
+        result_fail(out, MAGB_ERR_ISP, "DL CHECKSUM BAD");
+        isp_http_cleanup(ctx, 0U, false, true);
+        return;
+    }
+    dl_checksum = res.computed_checksum;
+    dl_body_len = res.body_len;
+    sprintf(out->detail[0], "DL %u B OK", dl_body_len);
+
+    /* ---- Upload: probe (no body) for the challenge, then send the
+     * full deterministic pattern (never stored, generated on the fly)
+     * with the computed Authorization. --------------------------- */
+    r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
+
+    sprintf(req, "POST %s HTTP/1.0\r\nHost: %s\r\nContent-Length: 0\r\n\r\n",
+            TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST);
+    req_len = (uint16_t)strlen(req);
+    r = gb00_stream_request(ctx, conn_id, (const uint8_t *)req, req_len, status, &res, &fail_stage);
+    if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
+
+    if (strncmp(status, "401", 3) != 0 || !bb_challenge_auth(res.head_len, id.login, password, auth_header)) {
+        bb_fail(ctx, out, MAGB_ERR_ISP, "NO WWW-AUTH HDR", conn_id);
+        return;
+    }
+    (void)magb_tcp_close(ctx, conn_id);
+    r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
+    if (r != MAGB_OK) { result_fail_code(out, r, "TCP REOPEN FAIL", kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
+
+    sprintf(req, "POST %s HTTP/1.0\r\nHost: %s\r\n%sContent-Length: %u\r\nX-Test-Checksum: %hx%hx\r\n\r\n",
+            TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST, auth_header,
+            TEST_BIGBUFFER_SIZE, (uint8_t)(dl_checksum >> 8), (uint8_t)(dl_checksum & 0xFFU));
+    req_len = (uint16_t)strlen(req);
+    /* 261 bytes -- must be chunked, see tcp_send_all()'s own comment. */
+    r = tcp_send_all(ctx, conn_id, (const uint8_t *)req, req_len);
+    if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD HDR SEND FAIL", conn_id); return; }
+
+    for (sent = 0U; sent < TEST_BIGBUFFER_SIZE; ) {
+        uint16_t remaining = (uint16_t)(TEST_BIGBUFFER_SIZE - sent);
+        uint8_t chunk_len = (remaining > TEST_BIGBUFFER_UPLOAD_CHUNK)
+                             ? (uint8_t)TEST_BIGBUFFER_UPLOAD_CHUNK : (uint8_t)remaining;
+        uint8_t i;
+
+        for (i = 0U; i < chunk_len; i++) {
+            chunk[i] = (uint8_t)((sent + i) & 0xFFU);
+        }
+        r = tcp_send_raw(ctx, conn_id, chunk, chunk_len);
+        if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD BODY SEND FAIL", conn_id); return; }
+        sent = (uint16_t)(sent + chunk_len);
+    }
+
+    r = gb00_stream_recv(ctx, conn_id, status, &res, &fail_stage);
+    if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
+    (void)magb_tcp_close(ctx, conn_id);
+    isp_http_cleanup(ctx, 0U, false, true);
+
+    if (res.body_len < 1U || res.first_body_byte != 0x01U) {
+        sprintf(out->detail[1], "UP BYTE=%hx", res.first_body_byte);
+        result_fail(out, MAGB_ERR_ISP, "UPLOAD MISMATCH");
+        return;
+    }
+
+    out->rx_bytes = dl_body_len;
+    out->tx_bytes = TEST_BIGBUFFER_SIZE;
+    out->passed = true;
+    out->result = MAGB_OK;
+    sprintf(out->detail[1], "UPLOAD OK");
+    sprintf(out->official_code, "32-%s", status);
+}
+
 /* ---- Test 2b/2c: ISP Email (SMTP send / POP3 receive) ------------------
  * Neither SMTP nor POP3 is a Mobile Adapter command -- both are just
  * ordinary line-based text protocols run over a plain TCP connection
