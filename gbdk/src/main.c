@@ -59,31 +59,30 @@ void main(void)
             break;
 
         case UI_MENU_ISP_HTTP: {
-            /* "NEWS CONFIG" and "NEWS ARTICLE" both require REON's
-             * GB00 auth (confirmed by reading news.php -- see
-             * docs/protocol-notes.md); they used to be named
-             * "NEWS CONFIG"/"NEWS (AUTH)", which wrongly implied only
-             * one of them needed authentication. "NEWS ARTICLE" fetches
-             * config *and* article in one ISP session, matching the
-             * real game's actual flow (test_isp_news_article()); "NEWS
-             * CONFIG" stays available on its own as an isolated
-             * diagnostic. */
+            /* "NEWS ARTICLE" requires REON's GB00 auth (confirmed by
+             * reading news.php -- see docs/protocol-notes.md) and
+             * fetches config *and* article in one ISP session, matching
+             * the real game's actual flow (test_isp_news_article()).
+             * A standalone "NEWS CONFIG" test used to exist as an
+             * isolated diagnostic for just the config half, but "NEWS
+             * ARTICLE" already exercises that same fetch on its way to
+             * the article, making the standalone version redundant --
+             * removed rather than kept as dead weight. */
             static const char *const kIspLabels[] = {
                 "TAMAGO EGG",
-                "NEWS CONFIG",
                 "NEWS ARTICLE",
                 "TRAINER HOME",
                 "EMAIL SEND",
                 "EMAIL RECV",
                 "RAW TCP(NC)"
             };
-            #define ISP_SUBMENU_COUNT 7U
+            #define ISP_SUBMENU_COUNT 6U
             uint8_t choice = ui_select_submenu("ISP/HTTP", kIspLabels, ISP_SUBMENU_COUNT);
 
             /* Shared "TESTING..." for every choice that actually runs a
              * test_result_t-based test (everything except Raw TCP,
              * which draws its own screen, and "cancelled") -- one call
-             * site instead of six identical ones. (Reusing kIspLabels[]
+             * site instead of five identical ones. (Reusing kIspLabels[]
              * for the ui_show_result() titles below, instead of the
              * literals each case already has, was tried and measurably
              * cost *more* code than the duplicate strings it removed --
@@ -91,7 +90,7 @@ void main(void)
              * for a `const char *const[]` is not cheap here even
              * computed once. Plain literals below are the smaller
              * option in practice, not just in theory.) */
-            if (choice < 6U) {
+            if (choice < 5U) {
                 ui_show_testing(false);
             }
             switch (choice) {
@@ -100,26 +99,22 @@ void main(void)
                 ui_show_result("TAMAGO EGG", &result);
                 break;
             case 1U:
-                test_isp_http_gb00(&ctx, &result, isp_password, TEST_HTTP_HOST, TEST_HTTP_PORT, TEST_HTTP_NEWS_CONFIG_PATH);
-                ui_show_result("NEWS CONFIG", &result);
-                break;
-            case 2U:
                 test_isp_news_article(&ctx, &result, isp_password);
                 ui_show_result("NEWS ARTICLE", &result);
                 break;
-            case 3U:
+            case 2U:
                 test_isp_http(&ctx, &result, isp_password, TEST_HTTP_TRAINER_HOME_HOST, TEST_HTTP_TRAINER_HOME_PORT, TEST_HTTP_TRAINER_HOME_PATH);
                 ui_show_result("TRAINER HOME", &result);
                 break;
-            case 4U:
+            case 3U:
                 test_isp_email_send(&ctx, &result, isp_password);
                 ui_show_result("EMAIL SEND", &result);
                 break;
-            case 5U:
+            case 4U:
                 test_isp_email_recv(&ctx, &result, isp_password);
                 ui_show_result("EMAIL RECV", &result);
                 break;
-            case 6U:
+            case 5U:
                 /* No password needed (libmobile doesn't validate ISP
                  * Login credentials, and there is no auth step in a
                  * raw TCP session) -- only the target IP is editable

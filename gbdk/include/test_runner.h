@@ -50,20 +50,18 @@ void test_adapter_session(magb_context_t *ctx, test_result_t *out);
 void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password,
                     const char *host, uint16_t port, const char *path);
 
-/** Like test_isp_http(), but performs REON's GB00 challenge/response
- * HTTP authentication first if the server answers with 401 and a
- * WWW-Authenticate: GB00 header (see docs/protocol-notes.md, "GB00
- * HTTP authentication"). The GB00 login is the same live-config login
- * ID test_isp_http() uses; `password` is the same account password. */
-void test_isp_http_gb00(magb_context_t *ctx, test_result_t *out, const char *password,
-                         const char *host, uint16_t port, const char *path);
-
-/** The "NEWS ARTICLE" test: like test_isp_http_gb00(), but performs
- * the real game's full two-request flow in one ISP session -- fetches
+/** The "NEWS ARTICLE" test: like test_isp_http(), but performs REON's
+ * GB00 challenge/response HTTP authentication (see docs/protocol-
+ * notes.md, "GB00 HTTP authentication") and the real game's full
+ * two-request flow in one ISP session -- fetches
  * TEST_HTTP_NEWS_CONFIG_PATH (news size/SRAM-address/ranking-layout
  * metadata) first, then TEST_HTTP_NEWS_PATH (the actual news content),
  * each with its own GB00 challenge/response, sharing a single DNS
- * Query for TEST_HTTP_HOST. */
+ * Query for TEST_HTTP_HOST. The GB00 login is the same live-config
+ * login ID test_isp_http() uses; `password` is the same account
+ * password. (A standalone "NEWS CONFIG" test used to exist for just
+ * the first fetch in isolation -- removed as redundant once this test
+ * already exercises the same fetch on its way to the article.) */
 void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *password);
 
 /** Test 2b: Begin Session, Read Configuration to find the adapter's

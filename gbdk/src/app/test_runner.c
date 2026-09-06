@@ -672,68 +672,8 @@ static magb_result_t gb00_fetch(magb_context_t *ctx, const uint8_t host_ip[4], u
     return MAGB_OK;
 }
 
-void test_isp_http_gb00(magb_context_t *ctx, test_result_t *out, const char *password,
-                         const char *host, uint16_t port, const char *path)
-{
-    magb_result_t r;
-    magb_phone_status_t phone;
-    magb_isp_login_result_t isp;
-    magb_isp_identity_t id;
-    uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
-    uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
-    uint8_t host_ip[4];
-    uint16_t resp_len;
-    bool did_auth;
-    char status[4];
-    const char *fail_stage;
-
-    if (!require_password(out, password)) { return; }
-    result_init(out, MAGB_CMD_TRANSFER);
-
-    r = magb_begin_session(ctx);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
-
-    r = read_isp_identity(ctx, &id);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
-    /* detail[1] is only otherwise touched right below, at the very end
-     * of this function -- result_fail() only ever overwrites detail[0],
-     * so this survives to the result screen on every exit path, success
-     * or failure, which matters here specifically because a wrong
-     * login is the single most likely cause of a 401-after-retry. */
-    sprintf(out->detail[1], "LOGIN %s", id.login);
-
-    r = magb_telephone_status(ctx, &phone);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgPhoneStatusFailed); (void)magb_end_session(ctx); return; }
-
-    r = magb_dial(ctx, id.phone, MAGB_TIMEOUT_FRAMES_LONG);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, kCode20000); (void)magb_end_session(ctx); return; }
-
-    r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, kCode25000); isp_http_cleanup(ctx, 0U, false, false); return; }
-
-    /* Every hostname this test touches gets its own DNS Query (0x28)
-     * first -- there is exactly one here (`host`), queried once. */
-    r = magb_dns_query(ctx, host, host_ip);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, kCode15000); isp_http_cleanup(ctx, 0U, false, true); return; }
-
-    r = gb00_fetch(ctx, host_ip, port, host, path, id.login, password, status, &resp_len, &did_auth, &fail_stage);
-    if (r != MAGB_OK) {
-        result_fail_code(out, r, fail_stage, kCode32401);
-        isp_http_cleanup(ctx, 0U, false, true);
-        return;
-    }
-
-    isp_http_cleanup(ctx, 0U, false, true);
-    out->rx_bytes = resp_len;
-    out->passed = true;
-    out->result = MAGB_OK;
-    sprintf(out->detail[0], did_auth ? "AUTH -> HTTP %s" : "HTTP %s (NO AUTH)", status);
-    /* detail[1] is left as the "LOGIN <id>" line set above. */
-    sprintf(out->official_code, "32-%s", status);
-}
-
-/* Like test_isp_http_gb00(), but for the "NEWS ARTICLE" menu entry:
- * mirrors what a real game actually does for the Goldenrod
+/* The "NEWS ARTICLE" menu entry: mirrors what a real game actually
+ * does for the Goldenrod
  * Communication Center news feature -- fetch the news *config* first
  * (size, SRAM address, ranking layout; see news.php's
  * get_news_parameters_bin()), then the news *article* itself
