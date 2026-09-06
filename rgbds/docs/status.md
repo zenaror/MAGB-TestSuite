@@ -81,8 +81,8 @@ not implemented.
     `test_adapter_session()` output text exactly: "ADAPTER ID: `<hex>`"
     / "NINTENDO ECHO OK" on success.
   - **ISP/HTTP** (`RunIspHttpMenu`/`ShowIspSubMenu`, Test 2): opens the
-    same 7-item submenu gbdk's `ui_select_submenu()`/`kIspLabels[]` does
-    (same wording/order: Tamago Egg, News Config, News Article, Trainer
+    same 6-item submenu gbdk's `ui_select_submenu()`/`kIspLabels[]` does
+    (same wording/order: Tamago Egg, News Article, Trainer
     Home, Email Send, Email Recv, Raw TCP(NC)) -- title row 0, items
     starting row 2, "A:RUN B:BACK" footer, selection resets to item 0
     every time it's entered (unlike the main menu's persisted
@@ -342,8 +342,8 @@ Test 2, ported from `gbdk/src/app/test_runner.c`'s `test_isp_http()`:
 
 A from-scratch SM83 port of gbdk's `gb00_auth.c` (MD5 + base64 + REON's
 GB00 challenge/response bit-scramble) -- the crypto/encoding engine
-News Config/Article need, and now do use (see "GB00 HTTP fetch engine
-and News Config/Article" below). Not re-derived independently -- ported
+News Article needs, and now does use (see "GB00 HTTP fetch engine
+and News Article" below). Not re-derived independently -- ported
 directly from gbdk's already-round-trip-tested-against-REON's-real-PHP
 implementation, so this only needed to be a *faithful transcription*,
 verified against known-good outputs rather than against a live server:
@@ -394,7 +394,7 @@ previously-visible free space. This matters a lot for what's next:
 News/Email/Raw TCP would likely not have fit in the ~5.9 KiB that was
 left in `ROM0` alone.
 
-### GB00 HTTP fetch engine and News Config/Article (`src/app/gb00_auth.asm`, `src/main.asm`)
+### GB00 HTTP fetch engine and News Article (`src/app/gb00_auth.asm`, `src/main.asm`)
 
 `Gb00FetchOne::` (gb00_auth.asm) wraps one GB00-authenticated HTTP GET,
 mirroring gbdk's `gb00_http_get()`/`gb00_status_code()`/
@@ -407,10 +407,12 @@ Authorization-header prefix + that value + a shared suffix. Every
 request text this engine sends is a compile-time ROM blob or
 prefix+value+suffix copied byte-by-byte into WRAM -- no `sprintf`, no
 packed structs, matching this project's serialization convention.
-`GB00_RESP_BUF_SIZE` is 300, the same number gbdk's own hard-won 401
-capture forced it to (a real nginx 401 challenge response measured 227
-bytes; 200 silently truncated the `WWW-Authenticate` line and broke
-every News test before ever attempting the authenticated retry).
+`GB00_RESP_BUF_SIZE` is 360, matching gbdk's own hard-won number (a
+real nginx 401 challenge response measured 227 bytes; 200 silently
+truncated the `WWW-Authenticate` line and broke every News test before
+ever attempting the authenticated retry; gbdk later bumped 200 -> 300
+-> 360 for a real, larger News Article binary body, and this port had
+drifted a revision behind before being brought back in sync).
 
 Verified via PyBoy (fresh instances per case -- see "Hard-won bugs"
 below for why): `Gb00StatusCode` and `Gb00FindChallenge` against a
@@ -426,22 +428,25 @@ hardware-confirmed elsewhere, plus the two now-verified parsers), and
 only a real adapter can meaningfully exercise the actual 401-then-retry
 round trip.
 
-`RunNewsConfigTest`/`RunNewsArticleTest` (main.asm) wire this into the
-ISP/HTTP submenu's NEWS CONFIG/NEWS ARTICLE entries: both refuse to run
-at all with an empty ISP PASSWORD (matches gbdk's `require_password()`
--- GB00 auth validates this against a real account, unlike Dial/ISP
-Login), then Begin Session -> Read Identity -> Dial -> ISP Login -> one
-shared DNS Query (`gameboy.datacenter.ne.jp`, same host Tamago Egg/
-Trainer Home use) -> News Config does one `Gb00FetchOne`
-(`/cgb/download?name=/01/CGB-BXTJ/news/config.php`); News Article does
-that same fetch *and* the article fetch
-(`/cgb/download?name=/01/CGB-BXTJ/news/100.news.php`) in the same ISP
-session, neither relying on REON's optional session-auth cache (each
-gets its own real challenge/response) -- matching gbdk's
-`test_isp_http_gb00()`/`test_isp_news_article()` exactly. PyBoy
-confirms both reach `Begin Session -> WAKE -> TIMEOUT -> FAIL` cleanly
-with no adapter attached (the same baseline every other ISP/HTTP test
-shows), and that the empty-password guard fires correctly before ever
+`RunNewsArticleTest` (main.asm) wires this into the ISP/HTTP submenu's
+NEWS ARTICLE entry: refuses to run at all with an empty ISP PASSWORD
+(matches gbdk's `require_password()` -- GB00 auth validates this
+against a real account, unlike Dial/ISP Login), then Begin Session ->
+Read Identity -> Dial -> ISP Login -> one DNS Query
+(`gameboy.datacenter.ne.jp`, same host Tamago Egg/Trainer Home use) ->
+one `Gb00FetchOne` for the news config
+(`/cgb/download?name=/01/CGB-BXTJ/news/config.php`) *and* one for the
+article (`/cgb/download?name=/01/CGB-BXTJ/news/100.news.php`) in the
+same ISP session, neither relying on REON's optional session-auth
+cache (each gets its own real challenge/response) -- matching gbdk's
+`test_isp_news_article()` exactly. (A standalone `RunNewsConfigTest`
+used to exist for just the config fetch in isolation -- matching
+gbdk's now-removed `test_isp_http_gb00()`/"NEWS CONFIG" -- removed as
+redundant once this test already exercises that same fetch on its way
+to the article.) PyBoy confirms it reaches `Begin Session -> WAKE ->
+TIMEOUT -> FAIL` cleanly with no adapter attached (the same baseline
+every other ISP/HTTP test shows), and that the empty-password guard
+fires correctly before ever
 attempting a session.
 
 ### Email Send / Email Recv (`src/app/net_extra.asm`, `src/main.asm`)
@@ -593,20 +598,22 @@ ended exactly where expected.
 
 ### ISP/HTTP submenu (`src/main.asm`)
 
-`RunIspHttpMenu`/`ShowIspSubMenu` -- the 7-item submenu gbdk's
+`RunIspHttpMenu`/`ShowIspSubMenu` -- the 6-item submenu gbdk's
 `ui_select_submenu()`/`kIspLabels[]` opens (same wording/order: TAMAGO
-EGG, NEWS CONFIG, NEWS ARTICLE, TRAINER HOME, EMAIL SEND, EMAIL RECV,
+EGG, NEWS ARTICLE, TRAINER HOME, EMAIL SEND, EMAIL RECV,
 RAW TCP(NC)) -- now exists and is what the main menu's "ISP/HTTP" item
 opens, replacing the earlier milestone's "runs Tamago Egg directly"
 behavior. Title row 0, items starting row 2, `"A:RUN B:BACK"` footer,
 selection resets to item 0 every entry (a plain WRAM byte, not
-persisted like the main menu's), B returns to the main menu. All 7
-entries are now backed by a real implementation (Tamago Egg, Trainer
-Home, News Config, News Article, Email Send, Email Recv, Raw TCP) --
-none of this submenu's entries show "NOT IMPLEMENTED" anymore. Verified
-via PyBoy: all 7 labels render correctly, up/down/A/B navigation works,
-B returns to the main menu, and each entry reaches its own real test
-flow.
+persisted like the main menu's), B returns to the main menu. All 6
+entries are backed by a real implementation (Tamago Egg, Trainer
+Home, News Article, Email Send, Email Recv, Raw TCP) -- none of this
+submenu's entries show "NOT IMPLEMENTED". (A 7th entry, News Config,
+used to exist as a standalone diagnostic -- removed as redundant once
+News Article already exercises that same fetch on its way to the
+article.) Verified via PyBoy: all 6 labels render correctly,
+up/down/A/B navigation works, B returns to the main menu, and each
+entry reaches its own real test flow.
 
 ### UI feedback: sound and a build indicator
 
@@ -1288,8 +1295,8 @@ cannot provide for itself (per `CLAUDE.md`'s Responsibility Boundary).
 All three of the repo-root `CLAUDE.md`'s named tests (Adapter/Session,
 ISP/HTTP, P2P Caller/Listener) exist as real, working implementations,
 and -- new since the previous milestone -- so does every one of the
-ISP/HTTP submenu's 7 targets (Tamago Egg, Trainer Home, News Config,
-News Article, Email Send, Email Recv, Raw TCP), plus Read Configuration
+ISP/HTTP submenu's 6 targets (Tamago Egg, Trainer Home, News Article,
+Email Send, Email Recv, Raw TCP), plus Read Configuration
 Data, a protocol trace viewer, the ISP PASSWORD editor, live ISP
 identity reading, and a verified MD5/base64/GB00 authentication +
 GB00 HTTP fetch engine + line-based SMTP/POP3 engine. Test 2's Tamago

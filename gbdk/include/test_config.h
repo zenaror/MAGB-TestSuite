@@ -13,7 +13,7 @@
 #define TEST_CONFIG_H
 
 /* ISP dial string and login ID -- FALLBACK DEFAULTS ONLY. Every
- * ISP-touching test (test_isp_http(), test_isp_http_gb00(),
+ * ISP-touching test (test_isp_http(), test_isp_news_article(),
  * test_isp_email_send/recv() in test_runner.c, via the shared
  * read_isp_identity() helper) reads the real dial string
  * (Configuration Slot 1, BCD-decoded) and login ID
@@ -116,8 +116,8 @@
  * index.txt through only skips the *front controller's* cost check --
  * it does not stop the PHP script itself from demanding auth once
  * executed. This TestSuite implements that handshake (see
- * `include/gb00_auth.h`, `test_isp_http_gb00()` in test_runner.c, and
- * docs/protocol-notes.md's "GB00 HTTP authentication") using the
+ * `include/gb00_auth.h`, `test_isp_news_article()` in test_runner.c,
+ * and docs/protocol-notes.md's "GB00 HTTP authentication") using the
  * adapter's own live-config login ID (falling back to TEST_ISP_LOGIN)
  * and the ISP PASSWORD menu's password as the account credentials. */
 #define TEST_HTTP_NEWS_CONFIG_PATH "/cgb/download?name=/01/CGB-BXTJ/news/config.php"

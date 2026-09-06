@@ -2333,25 +2333,25 @@ RunIspHttpCore:
 ; wMenuSelected is) -- matches gbdk's `uint8_t sel = 0U;` being a normal
 ; local, not `static`, in ui_select_submenu().
 ;
-; Only TAMAGO EGG and TRAINER HOME are backed by a real implementation
-; (RunIspHttpCore, see above); the other five show the same honest
-; "NOT IMPLEMENTED" screen everything else unimplemented on this side
-; already uses (repo-root CLAUDE.md's "No Fake Implementations").
-DEF ISP_SUBMENU_COUNT EQU 7
+; Every item here is backed by a real implementation now. A standalone
+; "NEWS CONFIG" test used to exist (RunNewsConfigTest) as an isolated
+; diagnostic for just the config half of NEWS ARTICLE's flow --
+; removed once NEWS ARTICLE already exercised that same fetch on its
+; way to the article, making it redundant (matches gbdk's identical
+; removal of test_isp_http_gb00()/"NEWS CONFIG").
+DEF ISP_SUBMENU_COUNT EQU 6
 
-IspSubMenuItemAddrs: ; rows 2-8, column 0 (cursor); matches gotoxy(0, 2+i)
+IspSubMenuItemAddrs: ; rows 2-7, column 0 (cursor); matches gotoxy(0, 2+i)
     dw $9840
     dw $9860
     dw $9880
     dw $98A0
     dw $98C0
     dw $98E0
-    dw $9900
 
 ; Exact wording/order matches gbdk's kIspLabels[] in src/main.c.
 IspSubMenuLabels:
     dw sSubTamagoEgg
-    dw sSubNewsConfig
     dw sSubNewsArticle
     dw sSubTrainerHome
     dw sSubEmailSend
@@ -2360,7 +2360,6 @@ IspSubMenuLabels:
 
 IspSubMenuHandlers:
     dw RunTamagoEggTest
-    dw RunNewsConfigTest
     dw RunNewsArticleTest
     dw RunTrainerHomeTest
     dw RunEmailSendTest
@@ -2368,7 +2367,6 @@ IspSubMenuHandlers:
     dw RunRawTcpTest
 
 sSubTamagoEgg:   db "TAMAGO EGG", 0
-sSubNewsConfig:  db "NEWS CONFIG", 0
 sSubNewsArticle: db "NEWS ARTICLE", 0
 sSubTrainerHome: db "TRAINER HOME", 0
 sSubEmailSend:   db "EMAIL SEND", 0
@@ -2378,58 +2376,6 @@ sIspSubMenuTitle: db "ISP/HTTP", 0
 sSubMenuFooter:   db "A:RUN B:BACK", 0
 
 sSetIspPassword: db "SET ISP PASSWORD", 0
-
-; Prints "HTTP <status>" (+" (AUTH)" if the GB00 challenge/response
-; retry actually happened) at HTTP_ADDR (row 5) -- shorter than gbdk's
-; "AUTH -> HTTP %s"/"HTTP %s (NO AUTH)" (out->detail[0]) since this
-; ROM's screen is narrower, same information. Shared by
-; RunNewsConfigTest and RunNewsArticleTest (both call Gb00FetchOne).
-; Clobbers: everything (calls PrintString)
-ShowGb00StatusLine:
-    ld hl, sGb00HttpLabel
-    ld de, wGb00StatusMsg
-    ld b, 5
-.copyLabel
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .copyLabel
-
-    ld hl, wGb00FetchStatusText
-    ld b, 3
-.copyStatus
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .copyStatus
-
-    ld a, [wGb00FetchDidAuth]
-    or a, a
-    jr z, .noAuthMarker
-    ld hl, sGb00AuthMarker
-    ld b, sGb00AuthMarkerEnd - sGb00AuthMarker
-.copyMarker
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .copyMarker
-    xor a, a
-    ld [de], a
-    jr .printIt
-.noAuthMarker
-    xor a, a
-    ld [de], a
-.printIt
-    ld hl, wGb00StatusMsg
-    ld de, HTTP_ADDR
-    jp PrintString
-
-sGb00HttpLabel:   db "HTTP "
-sGb00AuthMarker:  db " (AUTH)"
-sGb00AuthMarkerEnd:
 
 ; Real REON path, gbdk/include/test_config.h's TEST_HTTP_NEWS_CONFIG_PATH
 ; -- same host as Tamago Egg/Trainer Home. get_news_parameters_bin()
@@ -2455,168 +2401,15 @@ sNewsConfigAuthPrefix:
     db "Authorization: GB00 name=", $22
 sNewsConfigAuthPrefixEnd:
 
-; ---- News Config (GB00-authenticated single fetch) ---------------------
-;
-; Matches gbdk's test_isp_http_gb00() with TEST_HTTP_NEWS_CONFIG_PATH:
-; Begin Session -> Read Identity -> Dial -> ISP Login -> DNS Query (same
-; TEST_HTTP_HOST as Tamago Egg/Trainer Home) -> one Gb00FetchOne (see
-; gb00_auth.asm) -> best-effort ISP Logout/Hang Up/End Session (TCP
-; Close already happened inside Gb00FetchOne itself, on every exit
-; path). Requires a non-empty ISP PASSWORD up front -- unlike Dial/ISP
-; Login (which libmobile accepts with any password), REON's GB00 auth
-; validates this against a real account and fails with a real
-; 401-after-retry if it's wrong, so an empty password is refused before
-; even trying rather than being sent and reported as a confusing
-; generic failure -- matches gbdk's require_password().
-; Clobbers: everything
-RunNewsConfigTest:
-    call ClearTextScreen
-    ld hl, sSubNewsConfig
-    ld de, $9801
-    call PrintString
-
-    ld a, [wIspPassword]
-    or a, a
-    jp z, .noPassword
-
-    ld a, CMD_SESSION
-    call SetCommand
-    ld a, STATUS_WAKE
-    call SetStatus
-    call MagbBeginSession
-    or a, a
-    jp nz, .showFail
-
-    ld a, CMD_READ_ID
-    call SetCommand
-    call ReadIdentity
-    or a, a
-    jp nz, .showFail
-
-    ld a, CMD_DIAL
-    call SetCommand
-    ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
-    ld [wExecTimeoutFrames], a
-    ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
-    ld [wExecTimeoutFrames + 1], a
-    ld hl, wIdentityPhone
-    ld b, 0
-.phoneLenLoop
-    ld a, [hl+]
-    or a, a
-    jr z, .havePhoneLen
-    inc b
-    jr .phoneLenLoop
-.havePhoneLen
-    ld hl, wIdentityPhone
-    call MagbDial
-    or a, a
-    jp nz, .showFail
-
-    ld a, CMD_ISP_LOGIN
-    call SetCommand
-    call BuildIspLoginPayload
-    call MagbIspLogin
-    or a, a
-    jp nz, .showFail
-
-    ld a, CMD_DNS
-    call SetCommand
-    ld hl, sDnsHostname
-    ld b, sDnsHostnameEnd - sDnsHostname
-    call MagbDnsQuery
-    or a, a
-    jp nz, .showFail
-
-    ld a, CMD_HTTP
-    call SetCommand
-    ld hl, sNewsConfigNoAuthReq
-    ld a, l
-    ld [wGb00FetchNoAuthPtr], a
-    ld a, h
-    ld [wGb00FetchNoAuthPtr + 1], a
-    ld a, sNewsConfigNoAuthReqEnd - sNewsConfigNoAuthReq
-    ld [wGb00FetchNoAuthLen], a
-    ld hl, sNewsConfigAuthPrefix
-    ld a, l
-    ld [wGb00FetchAuthPrefixPtr], a
-    ld a, h
-    ld [wGb00FetchAuthPrefixPtr + 1], a
-    ld a, sNewsConfigAuthPrefixEnd - sNewsConfigAuthPrefix
-    ld [wGb00FetchAuthPrefixLen], a
-    ld hl, wIdentityLogin
-    ld a, l
-    ld [wGb00FetchLoginPtr], a
-    ld a, h
-    ld [wGb00FetchLoginPtr + 1], a
-    ld hl, wIspPassword
-    ld a, l
-    ld [wGb00FetchPasswordPtr], a
-    ld a, h
-    ld [wGb00FetchPasswordPtr + 1], a
-    call Gb00FetchOne
-    or a, a
-    jp nz, .showGb00Fail
-
-    call ShowGb00StatusLine
-
-    ld a, CMD_ISP_LOGOUT
-    call SetCommand
-    call MagbIspLogout
-
-    ld a, CMD_HANGUP
-    call SetCommand
-    call MagbHangup
-
-    ld a, CMD_END_SESSION
-    call SetCommand
-    call MagbEndSession
-
-    call SoundSuccess
-    ld hl, sPass
-    ld de, RESULT_ADDR
-    call PrintString
-    jp WaitForBackButton
-
-.noPassword
-    call SoundError
-    ld hl, sFail
-    ld de, RESULT_ADDR
-    call PrintString
-    ld hl, sSetIspPassword
-    ld de, ERROR_ADDR
-    call PrintString
-    jp WaitForBackButton
-
-.showGb00Fail
-    cp a, MAGB_ERR_ISP
-    jr nz, .showFail
-    push af
-    call SoundError
-    ld hl, sFail
-    ld de, RESULT_ADDR
-    call PrintString
-    ld a, [wGb00FetchFailMsgPtr]
-    ld l, a
-    ld a, [wGb00FetchFailMsgPtr + 1]
-    ld h, a
-    ld de, ERROR_ADDR
-    call PrintString
-    pop af
-    jp WaitForBackButton
-
-.showFail
-    push af
-    call SoundError
-    ld hl, sFail
-    ld de, RESULT_ADDR
-    call PrintString
-    pop af
-    call PrintErrorCode
-    jp WaitForBackButton
-
 ; News Article's request/prefix strings (100.news.php, same host as
-; News Config above -- gbdk/include/test_config.h's TEST_HTTP_NEWS_PATH).
+; the News Config request strings above -- gbdk/include/test_config.h's
+; TEST_HTTP_NEWS_PATH). A standalone "News Config" test used to exist
+; here (RunNewsConfigTest, matching gbdk's now-removed
+; test_isp_http_gb00()) as an isolated diagnostic for just the config
+; fetch above -- removed once RunNewsArticleTest below already
+; exercises that same fetch (sNewsConfigNoAuthReq/sNewsConfigAuthPrefix
+; are still shared with it) on its way to the article, making a
+; standalone version redundant.
 sNewsArticleNoAuthReq:
     db "GET /cgb/download?name=/01/CGB-BXTJ/news/100.news.php HTTP/1.0", $0D, $0A
     db "Host: gameboy.datacenter.ne.jp", $0D, $0A

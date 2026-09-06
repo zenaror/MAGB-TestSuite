@@ -684,9 +684,11 @@ ISP Login/DNS Query, then `get_news_parameters_bin()`
 (`config.php` -- news size, the SRAM address to store it at, and the
 ranking-submission SRAM layout) followed by `get_news_file()`
 (`100.news.php` -- the actual news content), each with its own GB00
-challenge/response over its own TCP connection. "NEWS CONFIG" remains
-available separately as an isolated single-request diagnostic
-(`test_isp_http_gb00()`).
+challenge/response over its own TCP connection. A standalone
+"NEWS CONFIG" test used to exist as an isolated single-request
+diagnostic for just the config fetch (`test_isp_http_gb00()`) --
+removed once "NEWS ARTICLE" already exercised that same fetch on its
+way to the article, making it redundant.
 
 This deliberately does **not** rely on REON's optional 15-minute
 utility-auth session cache (`auth.php`'s
@@ -702,8 +704,8 @@ close-then-reopen TCP connections, which was never independently
 verified.
 
 A shared `gb00_fetch()` helper (`test_runner.c`) implements "GET, if
-401 then challenge/respond, GET again" once; both
-`test_isp_http_gb00()` and `test_isp_news_article()` call it per URL.
+401 then challenge/respond, GET again" once; `test_isp_news_article()`
+calls it per URL.
 
 **Credentials**: `validateAuthData()` looks up the account by
 `dion_ppp_id` and checks the password against the same
