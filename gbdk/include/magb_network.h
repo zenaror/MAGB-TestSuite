@@ -94,7 +94,7 @@ magb_result_t magb_transfer_data(magb_context_t *ctx, uint8_t conn_id,
  * in one session and 0x80+0x40 in another, for the same 192 bytes. An
  * adapter implementation that only ever sees one split has not really
  * been tested on this command, which is why the ritual test varies it
- * (see test_session_ritual()). */
+ * (see session_ritual(), which every test runs). */
 magb_result_t magb_read_config_split(magb_context_t *ctx, uint8_t out[MAGB_CONFIG_SIZE],
                                       uint8_t first_len);
 
