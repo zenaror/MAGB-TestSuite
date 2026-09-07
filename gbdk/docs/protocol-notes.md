@@ -1036,3 +1036,40 @@ fixture exist?". Confirmed by the person running that server:
 `F000` is independently derivable and worth keeping as a regression
 constant: the body is 32 complete 0..255 ramps, and
 `32 * (255*256/2) = 1044480`, which is `0xF000` mod 65536.
+
+### A 401 on the upload's third request is not a timing problem
+
+Worth writing down because the obvious guess is wrong, and this project
+has already spent days on a wrong guess about timing.
+
+Requests 2 and 3 of an upload are coupled through a PHP session: request
+2 writes the `Gb-Auth-ID`, request 3 reads it. That *looks* like it
+could race — the ROM sends request 3 as fast as it can, with no pause —
+and a real race of exactly that shape does exist elsewhere in REON (its
+POP3 `+OK` for `PASS` is emitted outside the callback that populates the
+maildrop, so a fast client can get `STAT 0 0` on a full mailbox).
+
+It cannot happen here, structurally rather than by luck of timing. The
+session file is written during PHP's shutdown, which runs even when the
+script leaves via `exit()` — which is exactly how `doAuth` type 0
+returns. PHP-FPM only reports end-of-request to nginx after that
+shutdown completes, so by the time the `200` + `Gb-Auth-ID` reaches the
+Game Boy, the session is already durable. The one function that would
+break this is `fastcgi_finish_request()`, which ends the response early
+and lets the script keep running; it appears nowhere in REON's web tree
+(verified by grep on the local checkout, and by the person running the
+production server, which is a separate tree — see the fixture note
+above). Output buffering and the `files` session handler don't open a
+window either, because the FPM decides when the request ends, not the
+output flow.
+
+So if an instrumented run ever shows a `401` on request 3, look at the
+`Gb-Auth-ID` itself — missing, wrong, or a session already destroyed —
+and not at how fast the ROM sent it.
+
+One asymmetry to check first if session behaviour ever does get strange:
+`serveFileOrExecScript()` calls `session_write_close()` only when it was
+*not* given a session id, so the download path (type 1, which passes
+one) leaves the close to shutdown while other paths close explicitly.
+Safe for the same reason as above, but it is a real difference between
+the two legs.
