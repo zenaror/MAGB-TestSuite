@@ -353,10 +353,6 @@ RunAdapterSessionTest:
     ld de, $9800
     call PrintString
 
-    call SessionRitual
-    or a, a
-    jp nz, .fail
-
     ld a, STATUS_WAKE
     call SetStatus
     call MagbBeginSession
@@ -579,10 +575,6 @@ RunReadConfigTest:
     ld hl, sMenuReadConfig
     ld de, $9800
     call PrintString
-
-    call SessionRitual
-    or a, a
-    jp nz, .fail
 
     ld a, STATUS_WAKE
     call SetStatus
@@ -2438,10 +2430,29 @@ sSetIspPassword: db "SET ISP PASSWORD", 0
 ; Runs the ritual. Returns A=0 on success; on failure A holds the
 ; MAGB_ERR_* and wRitualMsg holds "STEP n" for the caller to print.
 ;
-; EVERY test calls this before its own work, which is the point: a real
-; ROM never talks to the adapter without having gone through it first,
-; so a TestSuite that skips it is not testing what real software does.
-; It costs ~25 s per run, almost all of it the deliberate gaps;
+; Every test that CONNECTS calls this, and only those. That boundary
+; matters in both directions.
+;
+; The captured ritual is what a real ROM does before it dials, so a
+; connection reached without it is reached by a route no real software
+; takes -- the ISP tests all run it for the same reason they pace their
+; receives.
+;
+; But RunAdapterSessionTest and RunReadConfigTest deliberately do NOT,
+; and forcing it on them was a real mistake, caught on hardware. Those
+; two exist to exercise one primitive in isolation. A handshake test
+; that needs four prior handshakes to succeed before it starts is no
+; longer a handshake test: when the handshake is broken it fails inside
+; the prologue, and the result stops telling you which one broke. A
+; config-read test that reads the config twice before the read it is
+; measuring has the same problem. Diagnostic isolation is the whole
+; value of those two.
+;
+; P2P is excluded too, for a weaker but honest reason: the capture is of
+; an ISP connection, and there is none of a real ROM placing a P2P call.
+; Applying it there would be extrapolation dressed as fidelity.
+;
+; Costs ~25 s wherever it runs, almost all of it the deliberate gaps;
 ; MAGB_RITUAL_GAP_LONG_FRAMES is where most of that sits.
 ; Clobbers: everything
 SessionRitual::
