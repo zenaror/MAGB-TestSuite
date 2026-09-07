@@ -968,3 +968,49 @@ modules never land in bank 1, where the flat `_CODE` already lives.
 
 The RGBDS ROM needs none of this — it is hand-written assembly with
 ~12.6 KiB still free in ROMX bank 1 and no mapper change.
+
+## GB00: download and upload do NOT authenticate the same way
+
+Confirmed by reading REON's own `web/cgb/auth.php` and
+`web/htdocs/cgb/{download,upload}.php`, after a real run where the
+BIG BUFFER upload leg failed while its download leg passed.
+
+`doAuth($type)` issues the same `WWW-Authenticate: GB00` challenge in
+every case, but what it does *after* a valid `Authorization` depends on
+the type, and the callers pass different ones:
+
+| endpoint | call | on success |
+|---|---|---|
+| `download.php` | `doAuth(1)` | **returns** the session id; the script then serves the file, so the authenticated GET carries the content |
+| `news/NN.news.php` | `doAuth(2)` | **returns** the user id; the script outputs content directly |
+| `upload.php` | `doAuth()` (type 0) | sets `Gb-Auth-ID: <id>`, sends `200`, and **`exit()`s** — the request body is discarded |
+
+So an upload is **three** requests, not two:
+
+1. `POST` with no auth → `401` + `WWW-Authenticate: GB00 name="..."`
+2. `POST` + `Authorization: GB00 name="..."`, **`Content-Length: 0`** →
+   `200` + `Gb-Auth-ID: <id>`, empty body
+3. `POST` + `Gb-Auth-ID: <id>` + the real `Content-Length` and body
+
+`upload.php`'s own header comment states this outright: *"the server
+responds with 200 OK and a `Gb-Auth-ID` header ... The game then sends
+its POST request and includes the same `Gb-Auth-ID` header."*
+
+Sending the body on step 2 is not merely wasteful — it is dropped, and
+the server then answers step 2's headers rather than an upload verdict,
+which looks exactly like a failed upload. Both ROMs originally did that.
+
+Two smaller facts from the same source, worth not re-deriving:
+
+- Auth is keyed off a **cost prefix** on the filename, not the
+  directory: `getCost()` takes the leading dot-separated component and
+  requires it to be numeric. `0.bigbuffer.cgb` therefore *does* require
+  auth (cost 0, which `addCostToAccount()` then skips), which is why
+  that name was chosen for the test fixture.
+- `doAuth` runs **before** the file is looked up. A `401` from an
+  endpoint is therefore no evidence that the requested file exists —
+  a missing fixture and a present one challenge identically.
+
+The session id is `bin2hex(random_bytes(16))`, 32 characters today.
+Neither ROM assumes that width: both parse `Gb-Auth-ID` as an opaque
+token up to a generous cap and refuse rather than truncate past it.

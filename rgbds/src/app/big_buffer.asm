@@ -55,6 +55,7 @@ DEF BB_MAX_BODY_POLLS EQU 128
 DEF BB_REQ_BUF_SIZE EQU 288
 
 DEF BB_BODY_START_NONE EQU $FFFF
+DEF BB_AUTH_ID_MAX EQU 48
 
 ; ---- Buffers ----------------------------------------------------------
 ;
@@ -96,6 +97,11 @@ wBbFailMsgPtr:: dw
 ; out->detail[0]/detail[1].
 wBbDetail0:: ds 21
 wBbDetail1:: ds 21
+
+; REON's session id is bin2hex(random_bytes(16)) = 32 characters today.
+; Sized past that because nothing documents it as fixed; BbFindAuthId
+; refuses rather than truncates if it ever outgrows this.
+wBbAuthId: ds BB_AUTH_ID_MAX + 1
 
 SECTION "Big Buffer Code", ROMX, BANK[1]
 
@@ -396,6 +402,151 @@ BbFindChecksumHeader:
     ld [wBbExpected + 1], a
     ld a, 1
     ld [wBbChecksumPresent], a
+    ret
+
+sBbAuthIdHdr: db "Gb-Auth-ID:", 0
+DEF BB_AUTH_ID_HDR_LEN EQU 11
+
+; Copies the value of the "Gb-Auth-ID:" header out of the first
+; [wBbHeadLen] bytes of wGb00RespBuf into wBbAuthId, NUL-terminated:
+; leading spaces skipped, stopping at CR or LF. Same shape as gbdk's
+; gb00_find_header_token().
+; Output: A = 1 on success, 0 if the header is absent, empty, or longer
+;         than BB_AUTH_ID_MAX (refused rather than truncated -- a
+;         half-copied session id would fail in a far more confusing way)
+; Clobbers: everything
+BbFindAuthId:
+    xor a, a
+    ld [wBbAuthId], a
+
+    ld a, [wBbHeadLen + 1]
+    or a, a
+    jr nz, .sizeOk
+    ld a, [wBbHeadLen]
+    cp a, BB_AUTH_ID_HDR_LEN + 1
+    ret c
+.sizeOk
+    ld a, [wBbHeadLen]
+    ld c, a
+    ld a, [wBbHeadLen + 1]
+    ld b, a
+    ld a, c
+    sub a, BB_AUTH_ID_HDR_LEN
+    ld c, a
+    ld a, b
+    sbc a, 0
+    ld b, a
+
+    ld de, 0
+.scan
+    push bc
+    push de
+    ld hl, wGb00RespBuf
+    add hl, de
+    ld de, sBbAuthIdHdr
+    ld b, BB_AUTH_ID_HDR_LEN
+.cmp
+    ld a, [de]
+    cp a, [hl]
+    jr nz, .cmpFail
+    inc hl
+    inc de
+    dec b
+    jr nz, .cmp
+    pop de
+    pop bc
+    jr .copyValue
+.cmpFail
+    pop de
+    pop bc
+    inc de
+    ld a, c
+    cp a, e
+    ld a, b
+    sbc a, d
+    jr nc, .scan
+    xor a, a
+    ret
+
+; HL = first byte after the header name. DE = bytes remaining from HL.
+.copyValue
+    ld a, [wBbHeadLen]
+    ld e, a
+    ld a, [wBbHeadLen + 1]
+    ld d, a
+    push hl
+    ld bc, wGb00RespBuf
+    ld a, l
+    sub a, c
+    ld c, a
+    ld a, h
+    sbc a, b
+    ld b, a
+    ld a, e
+    sub a, c
+    ld e, a
+    ld a, d
+    sbc a, b
+    ld d, a
+    pop hl
+
+.skipSpaces
+    ld a, d
+    or a, e
+    jr z, .empty
+    ld a, [hl]
+    cp a, " "
+    jr nz, .copyLoop
+    inc hl
+    dec de
+    jr .skipSpaces
+
+.copyLoop
+    ld bc, wBbAuthId
+.copyNext
+    ld a, d
+    or a, e
+    jr z, .done
+    ld a, [hl]
+    cp a, $0D
+    jr z, .done
+    cp a, $0A
+    jr z, .done
+    ; refuse an over-long value rather than truncating it
+    push hl
+    ld hl, wBbAuthId + BB_AUTH_ID_MAX
+    ld a, c
+    cp a, l
+    ld a, b
+    sbc a, h
+    pop hl
+    jr nc, .tooLong
+    ld a, [hl+]
+    push hl
+    ld h, b
+    ld l, c
+    ld [hl+], a
+    ld b, h
+    ld c, l
+    pop hl
+    dec de
+    jr .copyNext
+
+.done
+    ld h, b
+    ld l, c
+    xor a, a
+    ld [hl], a
+    ld a, [wBbAuthId]
+    or a, a
+    ret z ; empty value
+    ld a, 1
+    ret
+
+.empty
+.tooLong
+    xor a, a
+    ld [wBbAuthId], a
     ret
 
 SECTION "Big Buffer Hex Scratch", WRAMX, BANK[1]
@@ -943,28 +1094,51 @@ sBbUpAuthPrefix:
     db "Authorization: GB00 name=", $22
 sBbUpAuthPrefixEnd:
 
-; Between the Authorization value and the checksum digits. Content-Length
+; Closes the Authorization value for upload request 2, which carries NO
+; body on purpose: REON's upload.php runs doAuth() (type 0), and that
+; branch answers a valid Authorization with 200 + a Gb-Auth-ID header
+; and exit()s -- it never reaches the upload handler, so any body sent
+; here is discarded. See BbRunTransfer's upload comment.
+sBbUpAuthCl0:
+    db $22, $0D, $0A
+    db "Content-Length: 0", $0D, $0A
+    db $0D, $0A
+sBbUpAuthCl0End:
+
+; Upload request 3 -- the actual upload, identified by the Gb-Auth-ID
+; the server just issued rather than by repeating the Authorization.
+sBbUpIdPrefix:
+    db "POST /cgb/upload?name=/01/MAGBTEST/0.bigbuffer.cgb HTTP/1.0", $0D, $0A
+    db "Host: gameboy.datacenter.ne.jp", $0D, $0A
+    db "Gb-Auth-ID: "
+sBbUpIdPrefixEnd:
+
+; Between the Gb-Auth-ID value and the checksum digits. Content-Length
 ; is the literal BB_SIZE -- if that constant ever changes, this string
 ; must change with it (asserted below rather than left to drift).
-sBbUpAuthMid:
-    db $22, $0D, $0A
+sBbUpIdMid:
+    db $0D, $0A
     db "Content-Length: 8192", $0D, $0A
     db "X-Test-Checksum: "
-sBbUpAuthMidEnd:
+sBbUpIdMidEnd:
 
 sBbUpAuthTail:
     db $0D, $0A, $0D, $0A
 sBbUpAuthTailEnd:
 
-ASSERT BB_SIZE == 8192, "sBbUpAuthMid's Content-Length is hardcoded to 8192"
+ASSERT BB_SIZE == 8192, "sBbUpIdMid's Content-Length is hardcoded to 8192"
 
 ; The authenticated POST header is the one request that exceeds a single
 ; Transfer Data payload; assert the buffer holds it rather than
 ; discovering a silent overrun at runtime.
 DEF BB_UP_AUTH_LEN EQU (sBbUpAuthPrefixEnd - sBbUpAuthPrefix) + GB00_AUTHORIZATION_LEN + \
-                       (sBbUpAuthMidEnd - sBbUpAuthMid) + 4 + \
-                       (sBbUpAuthTailEnd - sBbUpAuthTail)
-ASSERT BB_UP_AUTH_LEN <= BB_REQ_BUF_SIZE, "wBbReqBuf too small for the upload POST header"
+                       (sBbUpAuthCl0End - sBbUpAuthCl0)
+ASSERT BB_UP_AUTH_LEN <= BB_REQ_BUF_SIZE, "wBbReqBuf too small for upload request 2"
+
+DEF BB_UP_ID_LEN EQU (sBbUpIdPrefixEnd - sBbUpIdPrefix) + BB_AUTH_ID_MAX + \
+                     (sBbUpIdMidEnd - sBbUpIdMid) + 4 + \
+                     (sBbUpAuthTailEnd - sBbUpAuthTail)
+ASSERT BB_UP_ID_LEN <= BB_REQ_BUF_SIZE, "wBbReqBuf too small for upload request 3"
 
 DEF BB_DL_AUTH_LEN EQU (sBbDlAuthPrefixEnd - sBbDlAuthPrefix) + GB00_AUTHORIZATION_LEN + \
                        (sBbAuthSuffixEnd - sBbAuthSuffix)
@@ -1026,8 +1200,30 @@ BbBuildUpAuthReq:
     ld de, wGb00Authorization
     ld b, GB00_AUTHORIZATION_LEN
     call BbAppend
-    ld de, sBbUpAuthMid
-    ld b, sBbUpAuthMidEnd - sBbUpAuthMid
+    ld de, sBbUpAuthCl0
+    ld b, sBbUpAuthCl0End - sBbUpAuthCl0
+    call BbAppend
+
+    ld a, BB_UP_AUTH_LEN & $FF
+    ld [wBbReqLen], a
+    ld a, BB_UP_AUTH_LEN >> 8
+    ld [wBbReqLen + 1], a
+    ret
+
+; Builds upload request 3 into wBbReqBuf: the Gb-Auth-ID the server just
+; issued, the real Content-Length, and the download's verified checksum.
+; Length is computed rather than constant -- the id is a server-chosen
+; token, not a fixed-width field.
+; Clobbers: everything
+BbBuildUpIdReq:
+    ld hl, wBbReqBuf
+    ld de, sBbUpIdPrefix
+    ld b, sBbUpIdPrefixEnd - sBbUpIdPrefix
+    call BbAppend
+    ld de, wBbAuthId
+    call BbAppendStr
+    ld de, sBbUpIdMid
+    ld b, sBbUpIdMidEnd - sBbUpIdMid
     call BbAppend
 
     ld a, [wBbDlChecksum]
@@ -1040,9 +1236,12 @@ BbBuildUpAuthReq:
     ld b, sBbUpAuthTailEnd - sBbUpAuthTail
     call BbAppend
 
-    ld a, BB_UP_AUTH_LEN & $FF
+    ; length = write cursor - buffer start
+    ld a, l
+    sub a, LOW(wBbReqBuf)
     ld [wBbReqLen], a
-    ld a, BB_UP_AUTH_LEN >> 8
+    ld a, h
+    sbc a, HIGH(wBbReqBuf)
     ld [wBbReqLen + 1], a
     ret
 
@@ -1189,6 +1388,7 @@ BbUploadBody:
     ret
 
 sBbNoAuthHeader: db "NO WWW-AUTH HDR", 0
+sBbNoAuthId:     db "NO GB-AUTH-ID", 0
 sBbUpBodyFail:   db "UPLD BODY SEND FAIL", 0
 sBbUpHdrFail:    db "UPLD HDR SEND FAIL", 0
 sBbDlChecksumBad: db "DL CHECKSUM BAD", 0
@@ -1325,7 +1525,42 @@ BbRunTransfer::
     or a, a
     jp nz, .reopenFail
 
+    ; Upload request 2: authenticate ONLY, with no body. REON's
+    ; upload.php runs doAuth() (type 0), whose success branch sets a
+    ; Gb-Auth-ID header, sends 200 and exit()s -- it never reaches the
+    ; upload handler, so a body sent here would be silently discarded.
+    ; The real upload is request 3 below, carrying that id. (download.php
+    ; differs: it calls doAuth(1), which RETURNS instead of exiting, so
+    ; the authenticated GET does carry the content -- which is why the
+    ; download leg above needs only two requests.)
     call BbBuildUpAuthReq
+    call BbSendBuiltRequest
+    or a, a
+    jp nz, .closeAndReturn
+
+    call BbFindAuthId
+    or a, a
+    jr nz, .haveAuthId
+    call MagbTcpClose
+    ld hl, sBbNoAuthId
+    ld a, l
+    ld [wBbFailMsgPtr], a
+    ld a, h
+    ld [wBbFailMsgPtr + 1], a
+    ld a, MAGB_ERR_ISP
+    ret
+
+.haveAuthId
+    call MagbTcpClose
+    ld hl, wDnsResultIp
+    ld bc, 80
+    call MagbTcpOpen
+    or a, a
+    jp nz, .reopenFail
+
+    ; Upload request 3: the actual upload, identified by the Gb-Auth-ID
+    ; the server just issued rather than by repeating the Authorization.
+    call BbBuildUpIdReq
     ld hl, wBbReqBuf
     ld a, [wBbReqLen]
     ld c, a

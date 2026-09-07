@@ -826,6 +826,43 @@ static magb_result_t tcp_send_all(magb_context_t *ctx, uint8_t conn_id,
     return MAGB_OK;
 }
 
+/* Copies the value of header `needle` (leading spaces skipped, stopping
+ * at CR or LF) into `out`, NUL-terminated, up to out_cap-1 characters.
+ * Returns false if the header is absent or its value is empty or longer
+ * than the buffer -- never returns a truncated value.
+ *
+ * Used for REON's `Gb-Auth-ID`, whose value is an opaque server-chosen
+ * token (32 hex characters in practice, from bin2hex(random_bytes(16)),
+ * but treated here as an arbitrary string because nothing documents
+ * that length as fixed). */
+static bool gb00_find_header_token(const uint8_t *resp, uint16_t resp_len,
+                                    const char *needle, char *out, uint8_t out_cap)
+{
+    uint8_t needle_len = (uint8_t)strlen(needle);
+    uint16_t i;
+
+    for (i = 0U; (uint16_t)(i + needle_len) < resp_len; i++) {
+        if (memcmp(&resp[i], needle, needle_len) == 0) {
+            uint16_t j = (uint16_t)(i + needle_len);
+            uint8_t n = 0U;
+
+            while (j < resp_len && resp[j] == ' ') {
+                j++;
+            }
+            while (j < resp_len && resp[j] != '\r' && resp[j] != '\n') {
+                if (n >= (uint8_t)(out_cap - 1U)) {
+                    return false; /* longer than expected -- refuse rather than truncate */
+                }
+                out[n++] = (char)resp[j];
+                j++;
+            }
+            out[n] = '\0';
+            return n > 0U;
+        }
+    }
+    return false;
+}
+
 /* Finds `needle` (e.g. "X-Test-Checksum:") in an accumulated header
  * block and parses the 4 hex digits right after it (leading spaces
  * skipped, upper/lowercase both accepted) into `*out_value`. Returns
@@ -1058,6 +1095,11 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
     gb00_stream_result_t res;
     const char *fail_stage;
     static char auth_header[16U + GB00_AUTHORIZATION_LEN + 4U];
+    /* REON's session id is bin2hex(random_bytes(16)) = 32 characters
+     * today; sized past that because nothing documents it as fixed, and
+     * gb00_find_header_token() refuses rather than truncates if it ever
+     * outgrows this. */
+    static char auth_id[48];
     static char req[300];
     static uint8_t chunk[TEST_BIGBUFFER_UPLOAD_CHUNK]; /* static: SDCC's stack-simulated
                                                           * locals are expensive to index in
@@ -1129,9 +1171,29 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
     dl_body_len = res.body_len;
     sprintf(out->detail[0], "DL %u B OK", dl_body_len);
 
-    /* ---- Upload: probe (no body) for the challenge, then send the
-     * full deterministic pattern (never stored, generated on the fly)
-     * with the computed Authorization. --------------------------- */
+    /* ---- Upload: THREE requests, not two ---------------------------
+     *
+     * The upload endpoint does not authenticate the same way the
+     * download one does, and getting this wrong is invisible until the
+     * body silently vanishes. Confirmed by reading REON's own
+     * web/cgb/auth.php and web/htdocs/cgb/{download,upload}.php:
+     *
+     *   download.php calls doAuth(1). On success doAuth RETURNS the
+     *   session id and download.php goes on to serve the file, so the
+     *   authenticated GET carries the content back. Two requests.
+     *
+     *   upload.php calls doAuth() -- type 0. On success that branch
+     *   sets a `Gb-Auth-ID` header, sends 200, and exit()s. It never
+     *   reaches serveFileOrExecScript, so the request body is
+     *   discarded. The client has to make a THIRD request carrying
+     *   `Gb-Auth-ID: <id>`, and only that one is the actual upload.
+     *   upload.php's own doc comment says so outright: "the server
+     *   responds with 200 OK and a Gb-Auth-ID header... The game then
+     *   sends its POST request and includes the same Gb-Auth-ID."
+     *
+     * So: probe for the challenge, answer it with an EMPTY body (the
+     * 8 KiB would only be thrown away) to collect Gb-Auth-ID, then send
+     * the real POST with that id and the deterministic pattern. */
     r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
     if (r != MAGB_OK) { result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
 
@@ -1149,11 +1211,31 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
     r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
     if (r != MAGB_OK) { result_fail_code(out, r, "TCP REOPEN FAIL", kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
 
-    sprintf(req, "POST %s HTTP/1.0\r\nHost: %s\r\n%sContent-Length: %u\r\nX-Test-Checksum: %hx%hx\r\n\r\n",
-            TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST, auth_header,
+    /* Request 2: authenticate only. Content-Length: 0 on purpose. */
+    sprintf(req, "POST %s HTTP/1.0\r\nHost: %s\r\n%sContent-Length: 0\r\n\r\n",
+            TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST, auth_header);
+    req_len = (uint16_t)strlen(req);
+    r = gb00_stream_request(ctx, conn_id, (const uint8_t *)req, req_len, status, &res, &fail_stage);
+    if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
+
+    if (!gb00_find_header_token(s_gb00_resp, res.head_len, "Gb-Auth-ID:",
+                                 auth_id, sizeof(auth_id))) {
+        sprintf(out->detail[1], "AUTH STATUS %s", status);
+        bb_fail(ctx, out, MAGB_ERR_ISP, "NO GB-AUTH-ID", conn_id);
+        return;
+    }
+    (void)magb_tcp_close(ctx, conn_id);
+    r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
+    if (r != MAGB_OK) { result_fail_code(out, r, "TCP REOPEN FAIL", kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
+
+    /* Request 3: the real upload, identified by Gb-Auth-ID rather than
+     * by repeating the Authorization value. */
+    sprintf(req, "POST %s HTTP/1.0\r\nHost: %s\r\nGb-Auth-ID: %s\r\n"
+                 "Content-Length: %u\r\nX-Test-Checksum: %hx%hx\r\n\r\n",
+            TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST, auth_id,
             TEST_BIGBUFFER_SIZE, (uint8_t)(dl_checksum >> 8), (uint8_t)(dl_checksum & 0xFFU));
     req_len = (uint16_t)strlen(req);
-    /* 261 bytes -- must be chunked, see tcp_send_all()'s own comment. */
+    /* Can exceed one Transfer Data payload -- see tcp_send_all(). */
     r = tcp_send_all(ctx, conn_id, (const uint8_t *)req, req_len);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD HDR SEND FAIL", conn_id); return; }
 
