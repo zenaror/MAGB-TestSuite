@@ -13,6 +13,10 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Defined further down, next to its helpers, but called from the top of
+ * every test -- see its definition for why every test runs it. */
+bool session_ritual(magb_context_t *ctx, test_result_t *out);
+
 /* Diagnostic strings repeated across many of this file's tests (each
  * ISP test hits the same "BEGIN SESSION FAILED"/kMsgDialIspFailed/...
  * failure points independently) -- shared constants instead of a
@@ -160,6 +164,7 @@ void test_adapter_session(magb_context_t *ctx, test_result_t *out)
     magb_result_t r;
 
     result_init(out, MAGB_CMD_BEGIN_SESSION);
+    if (!session_ritual(ctx, out)) { return; }
 
     r = magb_begin_session(ctx);
     out->result = r;
@@ -185,6 +190,7 @@ void test_read_config(magb_context_t *ctx, uint8_t config_out[MAGB_CONFIG_SIZE],
     magb_result_t r;
 
     result_init(out, MAGB_CMD_READ_CONFIG);
+    if (!session_ritual(ctx, out)) { return; }
 
     if (!ctx->session_active) {
         r = magb_begin_session(ctx);
@@ -356,6 +362,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
     uint8_t got_len;
 
     result_init(out, MAGB_CMD_TRANSFER);
+    if (!session_ritual(ctx, out)) { return; }
 
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
@@ -519,6 +526,10 @@ static uint8_t s_gb00_resp[GB00_RESP_BUF_SIZE];
  * somewhere to put it, and reusing a test's own buffer would couple two
  * unrelated tests. */
 static uint8_t s_ritual_config[MAGB_CONFIG_SIZE];
+
+/* See test_isp_raw_tcp() -- the one test with no test_result_t of its
+ * own to hand the ritual. */
+static test_result_t s_raw_tcp_result;
 
 /* Finds "WWW-Authenticate:" in the accumulated response and copies the
  * GB00_CHALLENGE_LEN-character quoted challenge that follows the next
@@ -947,40 +958,42 @@ static bool ritual_config_session(magb_context_t *ctx, test_result_t *out, uint8
     return true;
 }
 
-void test_session_ritual(magb_context_t *ctx, test_result_t *out)
+/* Runs the ritual. Reports into `out` and returns false if any of it
+ * failed, so a caller can bail before its own work starts.
+ *
+ * Every test calls this, which is the point: a real ROM never talks to
+ * the adapter without having gone through it first, so a TestSuite that
+ * skips it is not testing what real software does. It costs ~25 s per
+ * run, almost all of it the deliberate gaps; TEST_RITUAL_GAP_LONG_FRAMES
+ * is where most of that sits. */
+bool session_ritual(magb_context_t *ctx, test_result_t *out)
 {
-    result_init(out, MAGB_CMD_BEGIN_SESSION);
-
-    if (!ritual_empty_session(ctx, out, 1U)) { return; }
+    if (!ritual_empty_session(ctx, out, 1U)) { return false; }
     pace(TEST_RITUAL_GAP_FRAMES);
 
-    if (!ritual_config_session(ctx, out, 2U, TEST_RITUAL_SPLIT_A)) { return; }
+    if (!ritual_config_session(ctx, out, 2U, TEST_RITUAL_SPLIT_A)) { return false; }
     pace(TEST_RITUAL_GAP_LONG_FRAMES);
 
-    if (!ritual_empty_session(ctx, out, 3U)) { return; }
+    if (!ritual_empty_session(ctx, out, 3U)) { return false; }
     pace(TEST_RITUAL_GAP_FRAMES);
 
-    if (!ritual_config_session(ctx, out, 4U, TEST_RITUAL_SPLIT_B)) { return; }
+    if (!ritual_config_session(ctx, out, 4U, TEST_RITUAL_SPLIT_B)) { return false; }
     pace(TEST_RITUAL_GAP_FRAMES);
 
-    /* Session 5 is the one a real ROM would dial from. Opening it and
-     * reading the config is the part that belongs to the ritual; what
-     * follows is ordinary ISP work the other tests cover. */
-    if (!ritual_config_session(ctx, out, 5U, TEST_RITUAL_SPLIT_B)) { return; }
-
-    /* Checksum the config we ended up with -- if the varying splits
-     * produced a garbled 192 bytes, this is where it shows, and it is a
-     * far more useful failure than "the sessions all completed". */
+    /* Checksum the config the varying splits produced. A garbled
+     * reassembly shows here rather than as four sessions that
+     * "worked" -- and it is checked on the way past rather than in a
+     * test of its own, because there is no longer a ritual test. */
     if (!magb_config_checksum_ok(s_ritual_config)) {
-        result_fail(out, MAGB_ERR_ISP, "CONFIG CHECKSUM BAD");
-        return;
+        result_fail(out, MAGB_ERR_ISP, "RITUAL CFG CKSUM BAD");
+        return false;
     }
 
-    out->passed = true;
-    out->result = MAGB_OK;
-    sprintf(out->detail[0], "5 SESSIONS OK");
-    sprintf(out->detail[1], "CFG %hx+%hx OK", (uint8_t)TEST_RITUAL_SPLIT_A,
-            (uint8_t)TEST_RITUAL_SPLIT_B);
+    /* The capture's fifth session is the one the ROM dials from, so it
+     * is the caller's own Begin Session, not ours. Leave the adapter
+     * idle here and let the test open it. */
+    pace(TEST_RITUAL_GAP_FRAMES);
+    return true;
 }
 
 /* ---- shared by BIG BUFFER and SMALL BUFFER --------------------------
@@ -1021,6 +1034,7 @@ static bool bb_session_prologue(magb_context_t *ctx, test_result_t *out,
 
     if (!require_password(out, password)) { return false; }
     result_init(out, MAGB_CMD_TRANSFER);
+    if (!session_ritual(ctx, out)) { return false; }
 
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return false; }
@@ -1577,6 +1591,7 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
     magb_result_t r;
 
     result_init(out, MAGB_CMD_TRANSFER);
+    if (!session_ritual(ctx, out)) { return; }
 
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
@@ -1791,6 +1806,7 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
 
     if (!require_password(out, password)) { return; }
     result_init(out, MAGB_CMD_TRANSFER);
+    if (!session_ritual(ctx, out)) { return; }
 
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
@@ -1954,6 +1970,17 @@ void test_isp_raw_tcp(magb_context_t *ctx, const char *ip_digits, uint16_t port)
 
     cls();
     printf("ISP RAW TCP\n\n");
+
+    /* This test reports through its own screen rather than a
+     * test_result_t, so it needs somewhere for the ritual to write a
+     * failure. Static, not a local: test_result_t is ~60 bytes and
+     * SDCC's stack-simulated locals are expensive (repo-root CLAUDE.md,
+     * "Memory Constraints"). */
+    if (!session_ritual(ctx, &s_raw_tcp_result)) {
+        printf("RITUAL FAILED\n%s\nA/B:MENU", s_raw_tcp_result.detail[0]);
+        wait_ab();
+        return;
+    }
 
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { printf("BEGIN SESSION FAILED\n"); goto done_no_cleanup; }
@@ -2190,6 +2217,7 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     magb_result_t r;
 
     result_init(out, MAGB_CMD_DIAL);
+    if (!session_ritual(ctx, out)) { return; }
 
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
@@ -2259,6 +2287,7 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     magb_result_t r;
 
     result_init(out, MAGB_CMD_WAIT_CALL);
+    if (!session_ritual(ctx, out)) { return; }
 
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }

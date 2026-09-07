@@ -118,17 +118,6 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
  * MATS test frames (responder side), Hang Up, End Session. */
 void test_p2p_listener(magb_context_t *ctx, test_result_t *out);
 
-/** The "SESSION RITUAL" test: reproduces the sequence a real Mobile
- * Trainer performs before it dials -- five sessions, four of them
- * throwaway, separated by seconds of silence, with the 192-byte config
- * read at two different splits (0x80+0x40 and 0x60+0x60). Both the
- * sequence and the gaps are measured, not invented; see
- * test_config.h's TEST_RITUAL_* block.
- *
- * Takes ~25 s to run, almost all of it deliberate waiting, which is why
- * it is a test of its own rather than a prologue on every ISP test. It
- * needs no ISP password: nothing here authenticates or dials. */
-void test_session_ritual(magb_context_t *ctx, test_result_t *out);
 
 /** Read Configuration Data (0x19), both halves, into `config_out`. */
 void test_read_config(magb_context_t *ctx, uint8_t config_out[MAGB_CONFIG_SIZE], test_result_t *out);

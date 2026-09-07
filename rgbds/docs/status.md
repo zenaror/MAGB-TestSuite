@@ -1541,3 +1541,22 @@ been running on MBC5 for a while and passes, which is the empirical
 half of the same answer.)
 
 Not runtime-verified.
+
+
+## The session ritual runs before every test
+
+See `gbdk/docs/protocol-notes.md`, "The pre-connection ritual", for the
+capture it comes from. On this side it is `SessionRitual` in
+`src/main.asm`, called from all seven tests right after each draws its
+title and before its own `MagbBeginSession`.
+
+It was briefly a separate menu entry. That was wrong: a real ROM never
+talks to the adapter without having gone through it first, so reaching
+the wire by a route no real software takes is not testing what real
+software does. Every test now pays the ~25 s.
+
+On failure the ritual prints `STEP n` at `HTTP_ADDR` and returns the
+`MAGB_ERR_*`, which each caller feeds to its existing failure handler —
+no test needed a new one. `RunRawTcpTest` was the only awkward case on
+the GBDK side (it has no `test_result_t`); here every test already
+reports through the same screen helpers, so it was uniform.
