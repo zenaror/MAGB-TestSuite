@@ -64,12 +64,15 @@ its own — `0.smallbuffer.php` calls `doAuth(2)` itself, and
   these paths is therefore no evidence the fixture is installed — a
   missing file and a present one challenge identically. Check for the
   body, not the challenge.
-- **Case-insensitive checksum comparison is required.** The two
-  TestSuite ROMs disagree: GBDK emits lowercase (SDCC's `%hx`) and
-  RGBDS emits uppercase (its own digit table). Both pass only because
-  these fixtures `strtoupper()` the client's header. A reimplementation
-  that compares raw would fail the GBDK ROM and pass the RGBDS one —
-  which is exactly the kind of split that costs a day to find.
+- **Compare the checksum case-insensitively anyway.** Both ROMs now
+  send uppercase, so the fixtures' `strtoupper()` is belt-and-braces
+  rather than load-bearing. It was load-bearing until recently: GBDK
+  emitted lowercase via SDCC's `%hx` while RGBDS used its own uppercase
+  table, and only the server's normalisation hid the disagreement. Both
+  sides now build the header with an explicit, host-tested formatter
+  (`gbdk/include/magb_fmt.h`), so the two ROMs put identical bytes on
+  the wire — but keep the normalisation, because a client you did not
+  write may not.
 - **`X-Test-User` is only meaningful if the account exists** on the
   host you point at. On a fresh test server it reports whatever that
   server resolves.
