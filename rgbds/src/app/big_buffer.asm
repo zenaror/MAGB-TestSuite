@@ -140,6 +140,23 @@ BbAppendStr:
     inc de
     jr BbAppendStr
 
+; Waits MAGB_PACING_RECV_FRAMES VBlanks between receive polls, matching
+; what the real Mobile Trainer does rather than pulling as fast as the
+; link allows -- see protocol.inc for the measurements. Same halt/nop
+; frame wait MagbWakeAdapter uses; only VBlank is unmasked, so each halt
+; is one frame. A zero setting means no wait at all.
+; Clobbers: A, B
+BbPace:
+IF MAGB_PACING_RECV_FRAMES > 0
+    ld b, MAGB_PACING_RECV_FRAMES
+.wait
+    halt
+    nop
+    dec b
+    jr nz, .wait
+ENDC
+    ret
+
 sBbHexDigits: db "0123456789ABCDEF"
 
 ; Writes A as two uppercase hex digits at [HL], advancing HL.
@@ -789,6 +806,11 @@ BbStreamContinue:
     add hl, de
 
     ld c, 0 ; zero-length send: a poll, not a new send
+    push bc
+    push hl
+    call BbPace
+    pop hl
+    pop bc
     ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
     ld [wExecTimeoutFrames], a
     ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
@@ -918,6 +940,7 @@ BbStreamContinue:
     cp a, GB00_MAX_EMPTY_POLLS
     jr nc, .bodyDone
 
+    call BbPace
     ld hl, wGb00RespBuf
     ld b, BB_UPLOAD_CHUNK + 1 ; 254: the receive ceiling, not the send one
     ld c, 0

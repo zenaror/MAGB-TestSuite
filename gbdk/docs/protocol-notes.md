@@ -1104,3 +1104,48 @@ One asymmetry to check first if session behaviour ever does get strange:
 one) leaves the close to shutdown while other paths close explicitly.
 Safe for the same reason as above, but it is a real difference between
 the two legs.
+
+## Pacing: the TestSuite deliberately does not run flat out
+
+Measured, not guessed. A millisecond-timestamped BGB capture of the
+**real Mobile Trainer**, relayed by the person running the REON server:
+
+| what | measured |
+|---|---|
+| between data blocks of one HTTP transfer | 389, 389, 391, 405, 418, 336 ms |
+| idle polling after a transfer finished | 929–1067 ms, for 11 s |
+| request split into three sends | +35 ms, +80 ms |
+
+The first row is the important one: Mobile Trainer does **not** pull as
+fast as the link allows. It takes a block, processes it, and only then
+asks for the next. Both ROMs now wait ~400 ms between receive polls on
+the HTTP paths (`TEST_PACING_RECV_FRAMES` / `MAGB_PACING_RECV_FRAMES`,
+24 VBlanks), and both handle a zero setting as "no wait at all" so a
+stress run can have the old behaviour back:
+
+```sh
+make CFLAGS_EXTRA='-DTEST_PACING_RECV_FRAMES=0'   # gbdk
+```
+
+Why a diagnostic ROM should care: running flat out exercises timing
+paths no real client ever takes, and stops exercising the ones it does.
+
+**Two places deliberately still run flat out**, and the reasons are
+different:
+
+- **SMTP/POP3 line receive.** The measurements above are of HTTP block
+  transfers; there is no comparable capture of a line-at-a-time
+  protocol. More importantly, REON's POP3 path has a known race — its
+  `+OK` for `PASS` is emitted outside the callback that populates the
+  maildrop, so a fast client can get `STAT 0 0` on a full mailbox, which
+  the real Mobile Trainer never sees. Pacing these loops would hide a
+  real defect, and a TestSuite that stops reaching one has been made
+  worse.
+- **RAW TCP's live view.** It is an interactive window onto whatever
+  someone types at `nc`, not a fidelity test; a one-second poll would
+  make it feel broken. It stays at one frame.
+
+Not reproduced here: Mobile Trainer's pre-connection ritual (short empty
+sessions, EEPROM reads of varying length, multi-second gaps). That
+changes what a test *is* rather than how fast it runs, and belongs in a
+test of its own.

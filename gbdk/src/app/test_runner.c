@@ -4,6 +4,7 @@
 #include "magb_commands.h"
 #include "test_config.h"
 #include "gb00_auth.h"
+#include "serial_hw.h" /* serial_wait_vblanks(), for pace() below */
 
 #include <gb/gb.h> /* vsync(), joypad(); also used for the P2P receive poll spacing below */
 #include <gbdk/console.h> /* cls()/gotoxy(), for test_isp_raw_tcp()'s live view only --
@@ -215,6 +216,18 @@ void test_read_config(magb_context_t *ctx, uint8_t config_out[MAGB_CONFIG_SIZE],
 #define HTTP_MAX_TOTAL_BYTES 8192U
 #define HTTP_MAX_EMPTY_POLLS 5U
 
+/* Waits between successive receive polls on one connection, matching
+ * what the real Mobile Trainer does rather than pulling as fast as the
+ * link allows -- see TEST_PACING_RECV_FRAMES in test_config.h for the
+ * measurements and for how to turn this off. A zero setting means no
+ * wait at all, not a one-frame wait. */
+static void pace(uint8_t frames)
+{
+    if (frames != 0U) {
+        serial_wait_vblanks(frames);
+    }
+}
+
 static uint8_t s_http_resp[HTTP_RESP_BUF_SIZE];
 
 static void isp_http_cleanup(magb_context_t *ctx, uint8_t conn_id, bool have_conn, bool logged_in)
@@ -413,6 +426,7 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
            empty_polls < HTTP_MAX_EMPTY_POLLS) {
         uint8_t cap = (resp_len < HTTP_RESP_BUF_SIZE) ? (uint8_t)(HTTP_RESP_BUF_SIZE - resp_len) : 0U;
 
+        pace(TEST_PACING_RECV_FRAMES);
         r = magb_transfer_data(ctx, conn_id, NULL, 0U,
                                 &s_http_resp[resp_len], cap,
                                 &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
@@ -742,6 +756,7 @@ static magb_result_t gb00_stream_continue(magb_context_t *ctx, uint8_t conn_id,
            && empty_polls < HTTP_MAX_EMPTY_POLLS) {
         uint16_t remaining = (uint16_t)(GB00_RESP_BUF_SIZE - res->head_len);
         uint8_t cap = (remaining > 255U) ? 255U : (uint8_t)remaining;
+        pace(TEST_PACING_RECV_FRAMES);
         r = magb_transfer_data(ctx, conn_id, NULL, 0U, &s_gb00_resp[res->head_len], cap,
                                 &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
         if (r != MAGB_OK) { *fail_stage = "HTTP RECV FAIL"; return r; }
@@ -771,6 +786,7 @@ static magb_result_t gb00_stream_continue(magb_context_t *ctx, uint8_t conn_id,
     empty_polls = 0U;
     for (poll = 0U; !remote_closed && poll < BIG_BUFFER_MAX_BODY_POLLS
                     && empty_polls < HTTP_MAX_EMPTY_POLLS; poll++) {
+        pace(TEST_PACING_RECV_FRAMES);
         r = magb_transfer_data(ctx, conn_id, NULL, 0U, s_gb00_resp, 254U,
                                 &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
         if (r != MAGB_OK) { *fail_stage = "HTTP RECV FAIL"; return r; }
@@ -1357,6 +1373,15 @@ static magb_result_t tcp_recv_line(magb_context_t *ctx, uint8_t conn_id,
     *remote_closed = false;
     buf[0] = '\0';
 
+    /* Deliberately NOT paced at TEST_PACING_RECV_FRAMES, unlike the
+     * HTTP paths. The Mobile Trainer measurements those come from are
+     * of HTTP block transfers; SMTP/POP3 are line-at-a-time protocols
+     * with no comparable capture. More to the point, REON's POP3 path
+     * has a known race -- its `+OK` for PASS is emitted outside the
+     * callback that populates the maildrop, so a fast client can get
+     * `STAT 0 0` on a full mailbox. Pacing these loops would hide it.
+     * A TestSuite that stops reaching a real defect has been made
+     * worse, so this half deliberately keeps running flat out. */
     for (poll = 0U; poll < LINE_RECV_MAX_POLLS; poll++) {
         uint8_t got_len;
         bool closed = false;
@@ -1881,6 +1906,10 @@ void test_isp_raw_tcp(magb_context_t *ctx, const char *ip_digits, uint16_t port)
             break;
         }
         if (got_len == 0U) {
+            /* Deliberately NOT paced at TEST_PACING_IDLE_FRAMES. This
+             * is an interactive live view of whatever someone types at
+             * `nc`, not a fidelity test -- a one-second poll would make
+             * it feel broken. One frame keeps it responsive. */
             vsync();
         }
     }
