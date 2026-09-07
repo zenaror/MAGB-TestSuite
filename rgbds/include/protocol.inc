@@ -159,6 +159,22 @@ DEF MAGB_TIMEOUT_FRAMES_SHORT EQU 180 ; ~3s @ ~59.7Hz: session control commands
 ; adapter/relay level, and OS-level connect timeouts commonly run past
 ; a few seconds on their own).
 DEF MAGB_TIMEOUT_FRAMES_LONG EQU 900 ; ~15s @ ~59.7Hz
+
+; ---- Pacing ------------------------------------------------------------
+;
+; VBlanks (~59.7 Hz, ~17 ms each) to wait between successive receive
+; polls on one connection. Mirrors gbdk/include/test_config.h's
+; TEST_PACING_RECV_FRAMES, and the numbers are not invented: they come
+; from a millisecond-timestamped BGB capture of the REAL Mobile Trainer
+; (389, 389, 391, 405, 418, 336 ms between data blocks of one HTTP
+; transfer; ~1 s between idle polls afterwards). It does NOT pull as
+; fast as the link allows -- it takes a block, processes it, and only
+; then asks for the next.
+;
+; Running flat out exercises timing paths no real client takes, and
+; stops exercising the ones it does. Set to 0 for a stress run; zero is
+; handled explicitly, as no wait at all.
+DEF MAGB_PACING_RECV_FRAMES EQU 24 ; ~400 ms between blocks of one transfer
 ; A P2P Dial needs even more headroom than an ISP Dial -- matches
 ; gbdk/src/app/test_runner.c's MAGB_TIMEOUT_FRAMES_P2P_CALL exactly,
 ; there confirmed against a real two-machine BGB session and against

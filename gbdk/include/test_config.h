@@ -165,6 +165,44 @@
 #define TEST_HTTP_SMALLBUFFER_PATH "/cgb/download?name=/01/MAGBTEST/0.smallbuffer.cgb"
 #define TEST_SMALLBUFFER_SIZE 128U
 
+/* ---- Pacing -----------------------------------------------------------
+ *
+ * How long to wait between successive receive polls on one connection,
+ * in VBlanks (~59.7 Hz, so ~17 ms each).
+ *
+ * These are not invented. They come from a millisecond-timestamped BGB
+ * capture of the REAL Mobile Trainer, relayed by the person running the
+ * REON server, and the numbers were consistent across the whole
+ * transfer:
+ *
+ *   between data blocks in one HTTP transfer: 389, 389, 391, 405, 418,
+ *     336 ms -- call it ~400 ms. Mobile Trainer does NOT pull as fast
+ *     as the link allows; it takes a block, processes it, and only then
+ *     asks for the next.
+ *   idle after a transfer finished: 929..1067 ms, ~1 s, for 11 s before
+ *     it disconnected.
+ *
+ * Why a TestSuite should care, beyond faithfulness: running flat out
+ * exercises timing paths no real client ever takes, and stops
+ * exercising the ones it does. That is not hypothetical here -- REON's
+ * own POP3 path has a race (its `+OK` for PASS is emitted outside the
+ * callback that populates the maildrop) that the real Mobile Trainer
+ * never hits and a fast test client hits immediately. Both regimes are
+ * worth being able to run, which is why these are constants rather than
+ * hardcoded delays:
+ *
+ *   make CFLAGS_EXTRA='-DTEST_PACING_RECV_FRAMES=0 -DTEST_PACING_IDLE_FRAMES=0'
+ *
+ * gives back the old flat-out behaviour for stress runs. Zero is
+ * handled explicitly (no wait at all), not as a one-frame wait.
+ *
+ * Note this deliberately does NOT try to reproduce Mobile Trainer's
+ * pre-connection ritual (short empty sessions, EEPROM reads of varying
+ * length, multi-second gaps). That changes what the tests *are*, not
+ * just how fast they run, and belongs in a test of its own. */
+#define TEST_PACING_RECV_FRAMES 24U /* ~400 ms between blocks of one transfer */
+#define TEST_PACING_IDLE_FRAMES 60U /* ~1 s between idle polls */
+
 /* Mobile Trainer's real home page -- Dan Docs' "Mobile Trainer"
  * section documents this exact observed URL
  * (http://gameboy.datacenter.ne.jp/01/CGB-B9AJ/index.html,
