@@ -760,11 +760,27 @@ confusing symptom for a full day; tests that actually authenticate now
 refuse to run at all (`require_password()`) rather than send something
 made up.
 
-The buffer is plain RAM and resets on power-off. The ROM does now
-carry a mapper (MBC5, cartridge type `0x19`) — but for **code space**,
-not for saves, and it has no cart RAM or battery. See "ROM banking"
-below. If the password ever had to survive a power cycle that would be
-a separate change (MBC5+RAM+BATTERY), and it has never been asked for.
+It no longer resets on power-off. The ROM grew a mapper for **code
+space** (see "ROM banking" below), and once MBC5 was there,
+battery-backed RAM was a header byte away — cartridge type is now
+`0x1B` (MBC5+RAM+BATTERY) with one 8 KiB bank, and `src/app/save.c`
+keeps the password across power cycles.
+
+What did *not* change is the refusal to guess. There is still no
+compile-time default: a cartridge that was never written, whose battery
+died, or whose record fails its magic/version/checksum check loads as
+empty, and the authenticating tests still refuse to run. The stored
+record is validated before a single byte is handed back, because
+uninitialized cart RAM is arbitrary bytes and "looks like a password"
+is not good enough — silently loading garbage would recreate the exact
+failure mode that made the old guessed default worth deleting.
+
+The password is stored verbatim: on an emulator that means a plain
+`.sav` next to the ROM. There is nothing on a Game Boy to encrypt it
+with, and a cart's owner can always read its own save RAM, so the file
+should be treated as holding a real account credential — not committed,
+not attached to a bug report. The repo's `.gitignore` already excludes
+the whole emulator working directory, which is where BGB writes it.
 
 ## P2P: direct-IP dialing and relay-based calls are different mechanisms
 
@@ -918,8 +934,10 @@ failure modes below are silent at build time and fatal at runtime.
 
 The GBDK ROM was mapperless (cartridge type `0x00`, 32 KiB) until the
 BIG BUFFER test needed roughly 4 KiB more than the 826 bytes left. It
-is now **MBC5, cartridge type `0x19`, no cart RAM and no battery** —
-the mapper is there for code space only, not for saves.
+is now **MBC5, cartridge type `0x1B` (MBC5+RAM+BATTERY)** with one
+8 KiB RAM bank. The mapper was added for code space alone; the RAM and
+battery came afterwards, once it was there anyway, to persist the ISP
+password (see the GB00 section above and `src/app/save.c`).
 
 MBC1/MBC2/MBC3/MBC5 were all checked against the installed `bankpack`
 before choosing (bank ceilings 127 excluding `0x20`/`0x40`/`0x60`, 15,
@@ -1036,6 +1054,19 @@ fixture exist?". Confirmed by the person running that server:
 `F000` is independently derivable and worth keeping as a regression
 constant: the body is 32 complete 0..255 ramps, and
 `32 * (255*256/2) = 1044480`, which is `0xF000` mod 65536.
+
+**Confirmed working end to end on 2026-09-07** against the real server:
+`DL 8192 B OK` / `UPLOAD OK` / `CODE:32-200`. Both the streamed download
+checksum and the server's re-derivation of the uploaded body agreed.
+
+The earlier crash on this test (`PC=0x0038`, switchable window full of
+filler) was the 32 KiB overflow, confirmed by the same run passing on
+the 64 KiB MBC5 build. It presented as "only BIG BUFFER crashes" because
+its code, being the most recently added, was the part that sat past the
+boundary -- every older test's code was below it and intact. The
+bank-trampoline problem found while investigating was real and worth
+fixing, but it was not this crash: it would have taken NEWS ARTICLE down
+with it, since that test calls the same banked functions.
 
 ### A 401 on the upload's third request is not a timing problem
 

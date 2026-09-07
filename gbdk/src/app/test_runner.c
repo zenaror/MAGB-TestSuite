@@ -501,58 +501,6 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
 #define GB00_RESP_BUF_SIZE 360U
 static uint8_t s_gb00_resp[GB00_RESP_BUF_SIZE];
 
-/* Sends one HTTP/1.0 GET (optionally with an extra header line, e.g.
- * "Authorization: ...\r\n", or NULL for none) over `conn_id` and
- * accumulates the response into s_gb00_resp. Mirrors test_isp_http()'s
- * receive loop, kept separate because this flow needs to do it twice
- * (once to provoke the 401, once with the computed Authorization).
- * GB00_RESP_BUF_SIZE exceeds 255, unlike HTTP_RESP_BUF_SIZE, so every
- * per-call capacity passed to magb_transfer_data() (a uint8_t) is
- * explicitly clamped to 255 rather than just cast, which would
- * otherwise silently wrap for a "remaining space" value above 255. */
-static magb_result_t gb00_http_get(magb_context_t *ctx, uint8_t conn_id,
-                                    const char *host, const char *path,
-                                    const char *extra_header,
-                                    uint16_t *out_resp_len, bool *remote_closed)
-{
-    static char s_gb00_req[256];
-    magb_result_t r;
-    uint16_t resp_len = 0U;
-    uint8_t empty_polls = 0U;
-    uint8_t got_len;
-    uint16_t req_len;
-    uint8_t cap0;
-
-    sprintf(s_gb00_req, "GET %s HTTP/1.0\r\nHost: %s\r\n%s\r\n",
-            path, host, (extra_header != NULL) ? extra_header : "");
-    req_len = (uint16_t)strlen(s_gb00_req);
-
-    cap0 = (GB00_RESP_BUF_SIZE > 255U) ? 255U : (uint8_t)GB00_RESP_BUF_SIZE;
-    r = magb_transfer_data(ctx, conn_id, (const uint8_t *)s_gb00_req, (uint8_t)req_len,
-                            &s_gb00_resp[0], cap0,
-                            &got_len, remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
-    if (r != MAGB_OK) {
-        return r;
-    }
-    resp_len = got_len;
-
-    while (!*remote_closed && resp_len < GB00_RESP_BUF_SIZE && empty_polls < HTTP_MAX_EMPTY_POLLS) {
-        uint16_t remaining = (uint16_t)(GB00_RESP_BUF_SIZE - resp_len);
-        uint8_t cap = (remaining > 255U) ? 255U : (uint8_t)remaining;
-        r = magb_transfer_data(ctx, conn_id, NULL, 0U,
-                                &s_gb00_resp[resp_len], cap,
-                                &got_len, remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
-        if (r != MAGB_OK) {
-            return r;
-        }
-        empty_polls = (got_len == 0U && !*remote_closed) ? (uint8_t)(empty_polls + 1U) : 0U;
-        resp_len = (uint16_t)(resp_len + got_len);
-    }
-
-    *out_resp_len = resp_len;
-    return MAGB_OK;
-}
-
 /* Finds "WWW-Authenticate:" in the accumulated response and copies the
  * GB00_CHALLENGE_LEN-character quoted challenge that follows the next
  * '"' into `out` (NUL-terminated). No strstr() in GBDK's string.h. */
@@ -588,170 +536,6 @@ static bool gb00_status_code(const uint8_t *resp, uint16_t resp_len, char status
     memcpy(status, &resp[9], 3U);
     status[3] = '\0';
     return true;
-}
-
-/* Fetches one URL with REON's GB00 challenge/response auth: GET with
- * no Authorization; if the response isn't a 401, done (no auth was
- * required for this path). Otherwise finds the WWW-Authenticate
- * challenge, computes the Authorization value, and re-sends the GET
- * with it. Manages its own TCP connection (opens fresh, always closes
- * before returning -- the caller only owns Begin Session/Dial/ISP
- * Login/DNS around one or more calls to this). On MAGB_OK, `status`
- * holds the final 3-digit HTTP status and `*resp_len` the final
- * response's byte count (both from the auth retry if one happened,
- * from the first GET otherwise); `*did_auth` records which. On
- * failure, `*fail_stage` is a short human-readable label for
- * `out->detail[]` (e.g. "NO WWW-AUTH HDR") and the return value is the
- * `magb_result_t` to report (MAGB_ERR_ISP for an application-level
- * parse failure that isn't itself a magb_result_t). */
-static magb_result_t gb00_fetch(magb_context_t *ctx, const uint8_t host_ip[4], uint16_t port,
-                                 const char *host, const char *path,
-                                 const char *login, const char *password,
-                                 char status[4], uint16_t *resp_len, bool *did_auth,
-                                 const char **fail_stage)
-{
-    uint8_t conn_id;
-    magb_result_t r;
-    bool remote_closed;
-    char challenge[GB00_CHALLENGE_LEN + 1U];
-    static char auth_header[16U + GB00_AUTHORIZATION_LEN + 4U];
-
-    *did_auth = false;
-
-    r = magb_tcp_open(ctx, host_ip, port, &conn_id);
-    if (r != MAGB_OK) { *fail_stage = kMsgTcpOpenFailed; return r; }
-
-    r = gb00_http_get(ctx, conn_id, host, path, NULL, resp_len, &remote_closed);
-    if (r != MAGB_OK) {
-        (void)magb_tcp_close(ctx, conn_id);
-        *fail_stage = "HTTP SEND FAIL";
-        return r;
-    }
-
-    if (!gb00_status_code(s_gb00_resp, *resp_len, status)) {
-        (void)magb_tcp_close(ctx, conn_id);
-        *fail_stage = "NO HTTP/ PREFIX";
-        return MAGB_ERR_ISP;
-    }
-
-    if (strncmp(status, "401", 3) != 0) {
-        /* No auth needed after all (or something else entirely) --
-         * report the status directly, same shape as test_isp_http(). */
-        (void)magb_tcp_close(ctx, conn_id);
-        return MAGB_OK;
-    }
-
-    if (!gb00_find_challenge(s_gb00_resp, *resp_len, challenge)) {
-        (void)magb_tcp_close(ctx, conn_id);
-        *fail_stage = "NO WWW-AUTH HDR";
-        return MAGB_ERR_ISP;
-    }
-
-    /* REON's PHP closes the connection after the 401 (Connection: close
-     * is implied by HTTP/1.0); re-open before the authenticated retry. */
-    (void)magb_tcp_close(ctx, conn_id);
-    r = magb_tcp_open(ctx, host_ip, port, &conn_id);
-    if (r != MAGB_OK) { *fail_stage = "TCP REOPEN FAIL"; return r; }
-
-    {
-        char auth_value[GB00_AUTHORIZATION_LEN + 1U];
-        gb00_build_authorization(challenge, login, password, auth_value);
-        sprintf(auth_header, "Authorization: GB00 name=\"%s\"\r\n", auth_value);
-    }
-
-    r = gb00_http_get(ctx, conn_id, host, path, auth_header, resp_len, &remote_closed);
-    (void)magb_tcp_close(ctx, conn_id);
-    if (r != MAGB_OK) { *fail_stage = "AUTH SEND FAIL"; return r; }
-
-    if (!gb00_status_code(s_gb00_resp, *resp_len, status)) {
-        *fail_stage = "NO HTTP/ AFTER AUTH";
-        return MAGB_ERR_ISP;
-    }
-
-    *did_auth = true;
-    return MAGB_OK;
-}
-
-/* The "NEWS ARTICLE" menu entry: mirrors what a real game actually
- * does for the Goldenrod
- * Communication Center news feature -- fetch the news *config* first
- * (size, SRAM address, ranking layout; see news.php's
- * get_news_parameters_bin()), then the news *article* itself
- * (get_news_file()), in the same ISP session, one DNS query for the
- * shared host. Both legitimately need their own GB00 challenge/
- * response (this TestSuite does not rely on REON's optional 15-minute
- * utility-auth session cache across separate connections -- see
- * doAuth()'s $_SESSION['utility_authed_*'] path in auth.php -- since
- * that isn't guaranteed by the documented protocol, just observed as
- * an optimization the real client may use). */
-void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *password)
-{
-    magb_result_t r;
-    magb_phone_status_t phone;
-    magb_isp_login_result_t isp;
-    magb_isp_identity_t id;
-    uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
-    uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
-    uint8_t host_ip[4];
-    uint16_t resp_len;
-    bool did_auth;
-    char cfg_status[4];
-    char art_status[4];
-    const char *fail_stage;
-
-    if (!require_password(out, password)) { return; }
-    result_init(out, MAGB_CMD_TRANSFER);
-
-    r = magb_begin_session(ctx);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
-
-    r = read_isp_identity(ctx, &id);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
-    sprintf(out->detail[1], "LOGIN %s", id.login);
-
-    r = magb_telephone_status(ctx, &phone);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgPhoneStatusFailed); (void)magb_end_session(ctx); return; }
-
-    r = magb_dial(ctx, id.phone, MAGB_TIMEOUT_FRAMES_LONG);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, kCode20000); (void)magb_end_session(ctx); return; }
-
-    r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, kCode25000); isp_http_cleanup(ctx, 0U, false, false); return; }
-
-    /* One DNS Query (0x28) for TEST_HTTP_HOST -- shared by both fetches
-     * below, since both paths live on the same host. */
-    r = magb_dns_query(ctx, TEST_HTTP_HOST, host_ip);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, kCode15000); isp_http_cleanup(ctx, 0U, false, true); return; }
-
-    r = gb00_fetch(ctx, host_ip, TEST_HTTP_PORT, TEST_HTTP_HOST, TEST_HTTP_NEWS_CONFIG_PATH,
-                    id.login, password, cfg_status, &resp_len, &did_auth, &fail_stage);
-    if (r != MAGB_OK) {
-        /* fail_stage (e.g. "NO HTTP/ AFTER AUTH", 19 chars) already
-         * fills most of detail[0]'s 20-char budget on its own -- no
-         * room for a "CONFIG: "/"ARTICLE: " prefix there. detail[1]
-         * (normally "LOGIN <id>") carries which stage failed instead. */
-        result_fail_code(out, r, fail_stage, kCode32401);
-        strcpy(out->detail[1], "STAGE: CONFIG");
-        isp_http_cleanup(ctx, 0U, false, true);
-        return;
-    }
-    sprintf(out->detail[0], "CFG %s", cfg_status);
-
-    r = gb00_fetch(ctx, host_ip, TEST_HTTP_PORT, TEST_HTTP_HOST, TEST_HTTP_NEWS_PATH,
-                    id.login, password, art_status, &resp_len, &did_auth, &fail_stage);
-    if (r != MAGB_OK) {
-        result_fail_code(out, r, fail_stage, kCode32401);
-        strcpy(out->detail[1], "STAGE: ARTICLE");
-        isp_http_cleanup(ctx, 0U, false, true);
-        return;
-    }
-
-    isp_http_cleanup(ctx, 0U, false, true);
-    out->rx_bytes = resp_len;
-    out->passed = true;
-    out->result = MAGB_OK;
-    sprintf(out->detail[0], "CFG %s ART %s", cfg_status, art_status);
-    sprintf(out->official_code, "32-%s", art_status);
 }
 
 /* ---- "BIG BUFFER": GB00-authenticated download/upload of a body far
@@ -933,9 +717,9 @@ static uint16_t gb00_find_body_start(const uint8_t *resp, uint16_t resp_len)
  * body byte through a running 16-bit additive checksum (the same
  * algorithm this protocol's own packet checksum uses, see
  * docs/protocol-notes.md) instead of ever buffering the body in full
- * -- the entire reason this exists alongside gb00_fetch()/
- * gb00_http_get() above is a body (TEST_BIGBUFFER_SIZE) far larger
- * than GB00_RESP_BUF_SIZE. */
+ * -- the entire reason this streaming engine exists at all is a body
+ * (TEST_BIGBUFFER_SIZE) far larger than GB00_RESP_BUF_SIZE, which no
+ * buffer in this ROM could hold. */
 static magb_result_t gb00_stream_continue(magb_context_t *ctx, uint8_t conn_id,
                                            bool remote_closed, char status[4],
                                            gb00_stream_result_t *res,
@@ -1004,8 +788,7 @@ static magb_result_t gb00_stream_continue(magb_context_t *ctx, uint8_t conn_id,
 /* Sends `req` (a complete request line + headers, no body -- GET, or
  * POST with Content-Length: 0) and streams the response exactly like
  * gb00_stream_continue() documents. `res->head_len` on return lets the
- * caller reuse s_gb00_resp/gb00_find_challenge() for a 401, exactly
- * like gb00_fetch() does. */
+ * caller reuse s_gb00_resp/gb00_find_challenge() on a 401. */
 static magb_result_t gb00_stream_request(magb_context_t *ctx, uint8_t conn_id,
                                           const uint8_t *req, uint16_t req_len,
                                           char status[4], gb00_stream_result_t *res,
@@ -1081,90 +864,263 @@ static bool bb_challenge_auth(uint16_t head_len, const char *login, const char *
     return true;
 }
 
-void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *password)
+/* ---- shared by BIG BUFFER and SMALL BUFFER --------------------------
+ * The two differ only in payload size and in which half of REON's auth
+ * they reach; everything up to and including the verified download is
+ * identical, so it lives here once. These buffers are file-scope
+ * statics rather than function statics for the same reason: one copy,
+ * not two, on a ROM with a few hundred bytes to spare. */
+static char s_bb_auth_header[16U + GB00_AUTHORIZATION_LEN + 4U];
+/* REON's session id is bin2hex(random_bytes(16)) = 32 characters today;
+ * sized past that because nothing documents it as fixed, and
+ * gb00_find_header_token() refuses rather than truncates if it ever
+ * outgrows this. Also reused to read back X-Test-User. */
+static char s_bb_auth_id[48];
+static char s_bb_req[300];
+static char s_bb_status[4];
+/* Whether the download leg actually answered a 401. SMALL BUFFER's POST
+ * reuses that same Authorization value, so it must not run if no
+ * challenge ever happened -- s_bb_auth_header would be stale. */
+static bool s_bb_did_auth;
+/* static: SDCC's stack-simulated locals are expensive to index in a
+ * loop at this size -- see repo-root CLAUDE.md's "Memory Constraints"
+ * (avoid large local arrays). Shared by both tests' upload bodies. */
+static uint8_t s_bb_chunk[TEST_BIGBUFFER_UPLOAD_CHUNK];
+
+/* Begin Session -> Read Config -> Telephone Status -> Dial -> ISP Login
+ * -> DNS. Reports and tears down on failure; returns false if the
+ * caller should stop. */
+static bool bb_session_prologue(magb_context_t *ctx, test_result_t *out,
+                                 const char *password, magb_isp_identity_t *id,
+                                 uint8_t host_ip[4])
 {
     magb_result_t r;
     magb_phone_status_t phone;
     magb_isp_login_result_t isp;
-    magb_isp_identity_t id;
     uint8_t dns1[4] = { TEST_DNS_PRIMARY_A, TEST_DNS_PRIMARY_B, TEST_DNS_PRIMARY_C, TEST_DNS_PRIMARY_D };
     uint8_t dns2[4] = { TEST_DNS_SECONDARY_A, TEST_DNS_SECONDARY_B, TEST_DNS_SECONDARY_C, TEST_DNS_SECONDARY_D };
+
+    if (!require_password(out, password)) { return false; }
+    result_init(out, MAGB_CMD_TRANSFER);
+
+    r = magb_begin_session(ctx);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return false; }
+
+    r = read_isp_identity(ctx, id);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return false; }
+
+    r = magb_telephone_status(ctx, &phone);
+    if (r != MAGB_OK) { result_fail(out, r, kMsgPhoneStatusFailed); (void)magb_end_session(ctx); return false; }
+
+    r = magb_dial(ctx, id->phone, MAGB_TIMEOUT_FRAMES_LONG);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, kCode20000); (void)magb_end_session(ctx); return false; }
+
+    r = magb_isp_login(ctx, id->login, password, dns1, dns2, &isp);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, kCode25000); isp_http_cleanup(ctx, 0U, false, false); return false; }
+
+    r = magb_dns_query(ctx, TEST_HTTP_HOST, host_ip);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, kCode15000); isp_http_cleanup(ctx, 0U, false, true); return false; }
+
+    return true;
+}
+
+/* GETs `path`, answers a 401 with GB00 auth (reopening the connection
+ * first, which REON requires), streams the body through the running
+ * checksum and verifies it against X-Test-Checksum. Reports and tears
+ * the session down on failure; on success leaves the ISP session up so
+ * the caller can keep using it, with s_bb_status holding the final
+ * status and s_bb_auth_header the Authorization that was accepted.
+ *
+ * Works for both download auth types without knowing which it got:
+ * doAuth(1) and doAuth(2) issue the same challenge and both return the
+ * content on the authenticated GET. Only the upload side differs, and
+ * that is each caller's own business. */
+static bool bb_download_verified(magb_context_t *ctx, test_result_t *out,
+                                  const uint8_t *host_ip, const char *path,
+                                  const char *login, const char *password,
+                                  gb00_stream_result_t *res)
+{
+    magb_result_t r;
+    uint8_t conn_id;
+    const char *fail_stage;
+    uint16_t req_len;
+
+    s_bb_did_auth = false;
+
+    r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000); isp_http_cleanup(ctx, 0U, false, true); return false; }
+
+    sprintf(s_bb_req, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n", path, TEST_HTTP_HOST);
+    req_len = (uint16_t)strlen(s_bb_req);
+    r = gb00_stream_request(ctx, conn_id, (const uint8_t *)s_bb_req, req_len, s_bb_status, res, &fail_stage);
+    if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return false; }
+
+    if (strncmp(s_bb_status, "401", 3) == 0) {
+        if (!bb_challenge_auth(res->head_len, login, password, s_bb_auth_header)) {
+            bb_fail(ctx, out, MAGB_ERR_ISP, "NO WWW-AUTH HDR", conn_id);
+            return false;
+        }
+        s_bb_did_auth = true;
+        (void)magb_tcp_close(ctx, conn_id);
+        r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
+        if (r != MAGB_OK) { result_fail_code(out, r, "TCP REOPEN FAIL", kCode24000); isp_http_cleanup(ctx, 0U, false, true); return false; }
+
+        sprintf(s_bb_req, "GET %s HTTP/1.0\r\nHost: %s\r\n%s\r\n", path, TEST_HTTP_HOST, s_bb_auth_header);
+        req_len = (uint16_t)strlen(s_bb_req);
+        r = gb00_stream_request(ctx, conn_id, (const uint8_t *)s_bb_req, req_len, s_bb_status, res, &fail_stage);
+        if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return false; }
+    }
+    (void)magb_tcp_close(ctx, conn_id);
+
+    if (!res->checksum_present || res->computed_checksum != res->expected_checksum) {
+        sprintf(out->detail[0], "%hx%hx!=%hx%hx",
+                (uint8_t)(res->computed_checksum >> 8), (uint8_t)(res->computed_checksum & 0xFFU),
+                (uint8_t)(res->expected_checksum >> 8), (uint8_t)(res->expected_checksum & 0xFFU));
+        result_fail(out, MAGB_ERR_ISP, "DL CHECKSUM BAD");
+        isp_http_cleanup(ctx, 0U, false, true);
+        return false;
+    }
+    return true;
+}
+
+/* The "SMALL BUFFER" test: the small half of the synthetic pair.
+ *
+ * Both halves download and upload the same deterministic pattern, and
+ * both are synthetic (no real game data). What differs -- deliberately,
+ * this is the whole point of having two -- is the size and the
+ * authentication mechanism:
+ *
+ *   BIG   TEST_BIGBUFFER_SIZE bytes, far past one Transfer Data
+ *         response, so it exercises the streaming path. Download via
+ *         doAuth(1); upload via upload.php's doAuth() type 0, which
+ *         trades the Authorization for a Gb-Auth-ID and needs a third
+ *         request carrying it.
+ *   SMALL TEST_SMALLBUFFER_SIZE bytes, arriving in a SINGLE Transfer
+ *         Data response -- no streaming, no chunking. Both legs go
+ *         through doAuth(2) ("utility" auth) on the SAME URL: the POST
+ *         goes to the download path, NOT /cgb/upload, and REUSES the
+ *         Authorization from the GET with no second challenge.
+ *
+ * That reuse is the part nothing else covers. auth.php caches
+ * `utility_authed_user_id` for 15 minutes precisely so the official
+ * client can POST after authenticating once (news.php's own comment:
+ * "Ranking queries are POSTed without replaying a GB00 auth
+ * challenge"). It is the only piece of server-side state on this path,
+ * and it left with the NEWS ARTICLE test. */
+void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *password)
+{
+    magb_result_t r;
+    magb_isp_identity_t id;
     uint8_t host_ip[4];
     uint8_t conn_id;
-    char status[4];
     gb00_stream_result_t res;
     const char *fail_stage;
-    static char auth_header[16U + GB00_AUTHORIZATION_LEN + 4U];
-    /* REON's session id is bin2hex(random_bytes(16)) = 32 characters
-     * today; sized past that because nothing documents it as fixed, and
-     * gb00_find_header_token() refuses rather than truncates if it ever
-     * outgrows this. */
-    static char auth_id[48];
-    static char req[300];
-    static uint8_t chunk[TEST_BIGBUFFER_UPLOAD_CHUNK]; /* static: SDCC's stack-simulated
-                                                          * locals are expensive to index in
-                                                          * a loop at this size -- see
-                                                          * repo-root CLAUDE.md's "Memory
-                                                          * Constraints" (avoid large local
-                                                          * arrays). */
+    uint16_t dl_checksum;
+    uint16_t req_len;
+    uint8_t i;
+
+    if (!bb_session_prologue(ctx, out, password, &id, host_ip)) { return; }
+
+    if (!bb_download_verified(ctx, out, host_ip, TEST_HTTP_SMALLBUFFER_PATH,
+                               id.login, password, &res)) {
+        return;
+    }
+
+    /* Size is part of the contract, not incidental: a short read that
+     * happened to checksum correctly would otherwise pass silently. */
+    if (res.body_len != TEST_SMALLBUFFER_SIZE) {
+        sprintf(out->detail[0], "GOT %u WANT %u", res.body_len, (uint16_t)TEST_SMALLBUFFER_SIZE);
+        result_fail(out, MAGB_ERR_ISP, "SHORT BODY");
+        isp_http_cleanup(ctx, 0U, false, true);
+        return;
+    }
+    dl_checksum = res.computed_checksum;
+    sprintf(out->detail[0], "DL %u B OK", res.body_len);
+
+    /* The server reports which user its utility auth resolved, in
+     * X-Test-User. A correct body with user 0 would mean the request
+     * was served without ever authenticating -- a pass that proves
+     * nothing, which is exactly what this test exists to catch. */
+    if (!gb00_find_header_token(s_gb00_resp, res.head_len, "X-Test-User:",
+                                 s_bb_auth_id, sizeof(s_bb_auth_id))
+        || (s_bb_auth_id[0] == '0' && s_bb_auth_id[1] == '\0')
+        || !s_bb_did_auth) {
+        result_fail(out, MAGB_ERR_ISP, "NOT AUTHENTICATED");
+        isp_http_cleanup(ctx, 0U, false, true);
+        return;
+    }
+
+    /* ---- Upload: same URL, same Authorization, no re-challenge --- */
+    r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
+    if (r != MAGB_OK) { result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
+
+    sprintf(s_bb_req, "POST %s HTTP/1.0\r\nHost: %s\r\n%sContent-Length: %u\r\n"
+                      "X-Test-Checksum: %hx%hx\r\n\r\n",
+            TEST_HTTP_SMALLBUFFER_PATH, TEST_HTTP_HOST, s_bb_auth_header,
+            (uint16_t)TEST_SMALLBUFFER_SIZE,
+            (uint8_t)(dl_checksum >> 8), (uint8_t)(dl_checksum & 0xFFU));
+    req_len = (uint16_t)strlen(s_bb_req);
+    /* Exceeds one Transfer Data payload -- see tcp_send_all(). */
+    r = tcp_send_all(ctx, conn_id, (const uint8_t *)s_bb_req, req_len);
+    if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD HDR SEND FAIL", conn_id); return; }
+
+    for (i = 0U; i < (uint8_t)TEST_SMALLBUFFER_SIZE; i++) {
+        s_bb_chunk[i] = i;
+    }
+    r = tcp_send_raw(ctx, conn_id, s_bb_chunk, (uint8_t)TEST_SMALLBUFFER_SIZE);
+    if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD BODY SEND FAIL", conn_id); return; }
+
+    r = gb00_stream_recv(ctx, conn_id, s_bb_status, &res, &fail_stage);
+    if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
+    (void)magb_tcp_close(ctx, conn_id);
+    isp_http_cleanup(ctx, 0U, false, true);
+
+    /* A 401 here means the utility-auth window did not hold -- the one
+     * thing this leg exists to check. Worth naming separately from a
+     * checksum disagreement. */
+    if (strncmp(s_bb_status, "401", 3) == 0) {
+        result_fail(out, MAGB_ERR_ISP, "AUTH REUSE REJECTED");
+        return;
+    }
+
+    if (res.body_len < 1U || res.first_body_byte != 0x01U) {
+        if (res.checksum_present) {
+            sprintf(out->detail[1], "SRV %hx%hx WE %hx%hx",
+                    (uint8_t)(res.expected_checksum >> 8), (uint8_t)(res.expected_checksum & 0xFFU),
+                    (uint8_t)(dl_checksum >> 8), (uint8_t)(dl_checksum & 0xFFU));
+        } else {
+            sprintf(out->detail[1], "UP BYTE=%hx", res.first_body_byte);
+        }
+        result_fail(out, MAGB_ERR_ISP, "UPLOAD MISMATCH");
+        return;
+    }
+
+    out->rx_bytes = TEST_SMALLBUFFER_SIZE;
+    out->tx_bytes = TEST_SMALLBUFFER_SIZE;
+    out->passed = true;
+    out->result = MAGB_OK;
+    sprintf(out->detail[1], "UP OK REUSED AUTH");
+    sprintf(out->official_code, "32-%s", s_bb_status);
+}
+
+void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *password)
+{
+    magb_result_t r;
+    magb_isp_identity_t id;
+    uint8_t host_ip[4];
+    uint8_t conn_id;
+    gb00_stream_result_t res;
+    const char *fail_stage;
     uint16_t req_len;
     uint16_t dl_checksum;
     uint16_t dl_body_len;
     uint16_t sent;
 
-    if (!require_password(out, password)) { return; }
-    result_init(out, MAGB_CMD_TRANSFER);
-
-    r = magb_begin_session(ctx);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
-
-    r = read_isp_identity(ctx, &id);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgReadConfigFailed); (void)magb_end_session(ctx); return; }
-
-    r = magb_telephone_status(ctx, &phone);
-    if (r != MAGB_OK) { result_fail(out, r, kMsgPhoneStatusFailed); (void)magb_end_session(ctx); return; }
-
-    r = magb_dial(ctx, id.phone, MAGB_TIMEOUT_FRAMES_LONG);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDialIspFailed, kCode20000); (void)magb_end_session(ctx); return; }
-
-    r = magb_isp_login(ctx, id.login, password, dns1, dns2, &isp);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgIspLoginFailed, kCode25000); isp_http_cleanup(ctx, 0U, false, false); return; }
-
-    r = magb_dns_query(ctx, TEST_HTTP_HOST, host_ip);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgDnsQueryFailed, kCode15000); isp_http_cleanup(ctx, 0U, false, true); return; }
+    if (!bb_session_prologue(ctx, out, password, &id, host_ip)) { return; }
 
     /* ---- Download: GET, verify via streamed checksum -------------- */
-    r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
-    if (r != MAGB_OK) { result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
-
-    sprintf(req, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n", TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH, TEST_HTTP_HOST);
-    req_len = (uint16_t)strlen(req);
-    r = gb00_stream_request(ctx, conn_id, (const uint8_t *)req, req_len, status, &res, &fail_stage);
-    if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
-
-    if (strncmp(status, "401", 3) == 0) {
-        if (!bb_challenge_auth(res.head_len, id.login, password, auth_header)) {
-            bb_fail(ctx, out, MAGB_ERR_ISP, "NO WWW-AUTH HDR", conn_id);
-            return;
-        }
-        (void)magb_tcp_close(ctx, conn_id);
-        r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
-        if (r != MAGB_OK) { result_fail_code(out, r, "TCP REOPEN FAIL", kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
-
-        sprintf(req, "GET %s HTTP/1.0\r\nHost: %s\r\n%s\r\n",
-                TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH, TEST_HTTP_HOST, auth_header);
-        req_len = (uint16_t)strlen(req);
-        r = gb00_stream_request(ctx, conn_id, (const uint8_t *)req, req_len, status, &res, &fail_stage);
-        if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
-    }
-    (void)magb_tcp_close(ctx, conn_id);
-
-    if (!res.checksum_present || res.computed_checksum != res.expected_checksum) {
-        sprintf(out->detail[0], "%hx%hx!=%hx%hx",
-                (uint8_t)(res.computed_checksum >> 8), (uint8_t)(res.computed_checksum & 0xFFU),
-                (uint8_t)(res.expected_checksum >> 8), (uint8_t)(res.expected_checksum & 0xFFU));
-        result_fail(out, MAGB_ERR_ISP, "DL CHECKSUM BAD");
-        isp_http_cleanup(ctx, 0U, false, true);
+    if (!bb_download_verified(ctx, out, host_ip, TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH,
+                               id.login, password, &res)) {
         return;
     }
     dl_checksum = res.computed_checksum;
@@ -1197,13 +1153,13 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
     r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
     if (r != MAGB_OK) { result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
 
-    sprintf(req, "POST %s HTTP/1.0\r\nHost: %s\r\nContent-Length: 0\r\n\r\n",
+    sprintf(s_bb_req, "POST %s HTTP/1.0\r\nHost: %s\r\nContent-Length: 0\r\n\r\n",
             TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST);
-    req_len = (uint16_t)strlen(req);
-    r = gb00_stream_request(ctx, conn_id, (const uint8_t *)req, req_len, status, &res, &fail_stage);
+    req_len = (uint16_t)strlen(s_bb_req);
+    r = gb00_stream_request(ctx, conn_id, (const uint8_t *)s_bb_req, req_len, s_bb_status, &res, &fail_stage);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
 
-    if (strncmp(status, "401", 3) != 0 || !bb_challenge_auth(res.head_len, id.login, password, auth_header)) {
+    if (strncmp(s_bb_status, "401", 3) != 0 || !bb_challenge_auth(res.head_len, id.login, password, s_bb_auth_header)) {
         bb_fail(ctx, out, MAGB_ERR_ISP, "NO WWW-AUTH HDR", conn_id);
         return;
     }
@@ -1212,15 +1168,15 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
     if (r != MAGB_OK) { result_fail_code(out, r, "TCP REOPEN FAIL", kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
 
     /* Request 2: authenticate only. Content-Length: 0 on purpose. */
-    sprintf(req, "POST %s HTTP/1.0\r\nHost: %s\r\n%sContent-Length: 0\r\n\r\n",
-            TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST, auth_header);
-    req_len = (uint16_t)strlen(req);
-    r = gb00_stream_request(ctx, conn_id, (const uint8_t *)req, req_len, status, &res, &fail_stage);
+    sprintf(s_bb_req, "POST %s HTTP/1.0\r\nHost: %s\r\n%sContent-Length: 0\r\n\r\n",
+            TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST, s_bb_auth_header);
+    req_len = (uint16_t)strlen(s_bb_req);
+    r = gb00_stream_request(ctx, conn_id, (const uint8_t *)s_bb_req, req_len, s_bb_status, &res, &fail_stage);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
 
     if (!gb00_find_header_token(s_gb00_resp, res.head_len, "Gb-Auth-ID:",
-                                 auth_id, sizeof(auth_id))) {
-        sprintf(out->detail[1], "AUTH STATUS %s", status);
+                                 s_bb_auth_id, sizeof(s_bb_auth_id))) {
+        sprintf(out->detail[1], "AUTH STATUS %s", s_bb_status);
         bb_fail(ctx, out, MAGB_ERR_ISP, "NO GB-AUTH-ID", conn_id);
         return;
     }
@@ -1230,13 +1186,13 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
 
     /* Request 3: the real upload, identified by Gb-Auth-ID rather than
      * by repeating the Authorization value. */
-    sprintf(req, "POST %s HTTP/1.0\r\nHost: %s\r\nGb-Auth-ID: %s\r\n"
+    sprintf(s_bb_req, "POST %s HTTP/1.0\r\nHost: %s\r\nGb-Auth-ID: %s\r\n"
                  "Content-Length: %u\r\nX-Test-Checksum: %hx%hx\r\n\r\n",
-            TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST, auth_id,
+            TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST, s_bb_auth_id,
             TEST_BIGBUFFER_SIZE, (uint8_t)(dl_checksum >> 8), (uint8_t)(dl_checksum & 0xFFU));
-    req_len = (uint16_t)strlen(req);
+    req_len = (uint16_t)strlen(s_bb_req);
     /* Can exceed one Transfer Data payload -- see tcp_send_all(). */
-    r = tcp_send_all(ctx, conn_id, (const uint8_t *)req, req_len);
+    r = tcp_send_all(ctx, conn_id, (const uint8_t *)s_bb_req, req_len);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD HDR SEND FAIL", conn_id); return; }
 
     for (sent = 0U; sent < TEST_BIGBUFFER_SIZE; ) {
@@ -1246,14 +1202,14 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
         uint8_t i;
 
         for (i = 0U; i < chunk_len; i++) {
-            chunk[i] = (uint8_t)((sent + i) & 0xFFU);
+            s_bb_chunk[i] = (uint8_t)((sent + i) & 0xFFU);
         }
-        r = tcp_send_raw(ctx, conn_id, chunk, chunk_len);
+        r = tcp_send_raw(ctx, conn_id, s_bb_chunk, chunk_len);
         if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD BODY SEND FAIL", conn_id); return; }
         sent = (uint16_t)(sent + chunk_len);
     }
 
-    r = gb00_stream_recv(ctx, conn_id, status, &res, &fail_stage);
+    r = gb00_stream_recv(ctx, conn_id, s_bb_status, &res, &fail_stage);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
     (void)magb_tcp_close(ctx, conn_id);
     isp_http_cleanup(ctx, 0U, false, true);
@@ -1282,7 +1238,7 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
     out->passed = true;
     out->result = MAGB_OK;
     sprintf(out->detail[1], "UPLOAD OK");
-    sprintf(out->official_code, "32-%s", status);
+    sprintf(out->official_code, "32-%s", s_bb_status);
 }
 
 /* ---- Test 2b/2c: ISP Email (SMTP send / POP3 receive) ------------------
