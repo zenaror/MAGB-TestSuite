@@ -85,10 +85,9 @@ void main(void)
                 "TRAINER HOME",
                 "EMAIL SEND",
                 "EMAIL RECV",
-                "RAW TCP(NC)",
-                "SESSION RITUAL"
+                "RAW TCP(NC)"
             };
-            #define ISP_SUBMENU_COUNT 8U
+            #define ISP_SUBMENU_COUNT 7U
             uint8_t choice = ui_select_submenu("ISP/HTTP", kIspLabels, ISP_SUBMENU_COUNT);
 
             /* Shared "TESTING..." for every choice that actually runs a
@@ -130,14 +129,6 @@ void main(void)
             case 5U:
                 test_isp_email_recv(&ctx, &result, isp_password);
                 ui_show_result("EMAIL RECV", &result);
-                break;
-            case 7U:
-                /* Last, and deliberately so: ~25 s of mostly waiting,
-                 * and unlike everything above it neither dials nor
-                 * authenticates. */
-                ui_show_testing(false);
-                test_session_ritual(&ctx, &result);
-                ui_show_result("SESSION RITUAL", &result);
                 break;
             case 6U:
                 /* No password needed (libmobile doesn't validate ISP
