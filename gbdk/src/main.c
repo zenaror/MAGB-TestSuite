@@ -91,10 +91,9 @@ void main(void)
             uint8_t choice = ui_select_submenu("ISP/HTTP", kIspLabels, ISP_SUBMENU_COUNT);
 
             /* Shared "TESTING..." for every choice that actually runs a
-             * test_result_t-based test in the contiguous 0..5 range
-             * (Raw TCP draws its own screen; Session Ritual sits past
-             * it and shows its own) -- one call site instead of six
-             * identical ones. (Reusing kIspLabels[]
+             * test_result_t-based test (everything except Raw TCP,
+             * which draws its own screen, and "cancelled") -- one call
+             * site instead of six identical ones. (Reusing kIspLabels[]
              * for the ui_show_result() titles below, instead of the
              * literals each case already has, was tried and measurably
              * cost *more* code than the duplicate strings it removed --

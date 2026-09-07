@@ -2227,10 +2227,6 @@ RunIspHttpCore:
     ld de, $9801
     call PrintString
 
-    call SessionRitual
-    or a, a
-    jp nz, .showFail
-
     ld a, CMD_SESSION
     call SetCommand
     ld a, STATUS_WAKE
@@ -2406,215 +2402,6 @@ sSubMenuFooter:   db "A:RUN B:BACK", 0
 
 sSetIspPassword: db "SET ISP PASSWORD", 0
 
-; ---- The pre-connection ritual, run before EVERY test -----------------
-;
-; Reproduces what a real Mobile Trainer does before it dials: five
-; sessions, four of them throwaway, separated by seconds of silence,
-; with the config read at two DIFFERENT splits of the same 192 bytes.
-; The measured sequence and the timings are in protocol.inc.
-;
-; Why a test of its own rather than a prologue bolted onto the others:
-; it is ~25 s of mostly waiting, and every ISP test would pay that on
-; every run. What it exercises is real, though, and nothing else here
-; reaches it -- repeated Begin/End cycles with no traffic in between,
-; and a Read Configuration Data split the rest of this ROM never sends
-; ($80+$40; every other caller uses $60+$60, so an adapter that only
-; handles the even split passes everything else and fails here).
-;
-; The capture's fifth session goes on to dial and connect. This stops at
-; the end of it: dialling is what every other ISP test already does, and
-; repeating it here would only add another failure mode to a test about
-; session sequencing. Needs no ISP password -- nothing here
-; authenticates or dials.
-; Clobbers: everything
-; Runs the ritual. Returns A=0 on success; on failure A holds the
-; MAGB_ERR_* and wRitualMsg holds "STEP n" for the caller to print.
-;
-; Every test that CONNECTS calls this, and only those. That boundary
-; matters in both directions.
-;
-; The captured ritual is what a real ROM does before it dials, so a
-; connection reached without it is reached by a route no real software
-; takes -- the ISP tests all run it for the same reason they pace their
-; receives.
-;
-; But RunAdapterSessionTest and RunReadConfigTest deliberately do NOT,
-; and forcing it on them was a real mistake, caught on hardware. Those
-; two exist to exercise one primitive in isolation. A handshake test
-; that needs four prior handshakes to succeed before it starts is no
-; longer a handshake test: when the handshake is broken it fails inside
-; the prologue, and the result stops telling you which one broke. A
-; config-read test that reads the config twice before the read it is
-; measuring has the same problem. Diagnostic isolation is the whole
-; value of those two.
-;
-; P2P is excluded too, for a weaker but honest reason: the capture is of
-; an ISP connection, and there is none of a real ROM placing a P2P call.
-; Applying it there would be extrapolation dressed as fidelity.
-;
-; Costs ~25 s wherever it runs, almost all of it the deliberate gaps;
-; MAGB_RITUAL_GAP_LONG_FRAMES is where most of that sits.
-; Clobbers: everything
-SessionRitual::
-    ld hl, sRitualRunning
-    ld de, HTTP_ADDR
-    call PrintString
-
-    ld a, CMD_SESSION
-    call SetCommand
-    ld a, STATUS_WAKE
-    call SetStatus
-
-    ld a, 1
-    ld [wRitualStep], a
-    call RitualEmptySession
-    or a, a
-    jr nz, .fail
-    ld b, MAGB_RITUAL_GAP_FRAMES
-    call RitualWait
-
-    ld a, 2
-    ld [wRitualStep], a
-    ld a, MAGB_RITUAL_SPLIT_A
-    call RitualConfigSession
-    or a, a
-    jr nz, .fail
-    call RitualWaitLong ; loads its own 16-bit count
-
-    ld a, 3
-    ld [wRitualStep], a
-    call RitualEmptySession
-    or a, a
-    jr nz, .fail
-    ld b, MAGB_RITUAL_GAP_FRAMES
-    call RitualWait
-
-    ld a, 4
-    ld [wRitualStep], a
-    ld a, MAGB_RITUAL_SPLIT_B
-    call RitualConfigSession
-    or a, a
-    jr nz, .fail
-
-    ; Checksum the config the varying splits produced. A garbled
-    ; reassembly shows here rather than as four sessions that "worked".
-    call MagbConfigChecksumOk ; reads wConfigData directly, no input
-    or a, a
-    jr z, .badChecksum
-
-    ; The capture's fifth session is the one the ROM dials from, so it
-    ; is the caller's own Begin Session, not ours. Leave the adapter
-    ; idle here and let the test open it.
-    ld b, MAGB_RITUAL_GAP_FRAMES
-    call RitualWait
-    ; Clear the "running" line so the test's own output starts clean.
-    ld hl, sRitualBlank
-    ld de, HTTP_ADDR
-    call PrintString
-    xor a, a
-    ret
-
-.badChecksum
-    call ShowRitualStep
-    ld hl, sRitualChecksumBad
-    ld de, ERROR_ADDR
-    call PrintString
-    ld a, MAGB_ERR_ISP
-    ret
-
-.fail
-    push af
-    call ShowRitualStep
-    pop af
-    ret
-
-; Begin Session -> End Session, nothing in between.
-; Output: A = result (0=OK)
-; Clobbers: everything
-RitualEmptySession:
-    call MagbBeginSession
-    or a, a
-    ret nz
-    jp MagbEndSession
-
-; Begin Session -> Read Config at the given split -> End Session.
-; Input:  A = first chunk length
-; Output: A = result (0=OK)
-; Clobbers: everything
-RitualConfigSession:
-    ld [wRitualSplit], a
-    call MagbBeginSession
-    or a, a
-    ret nz
-    ld a, [wRitualSplit]
-    call MagbReadConfigSplit
-    or a, a
-    jr z, .readOk
-    push af
-    call MagbEndSession
-    pop af
-    ret
-.readOk
-    jp MagbEndSession
-
-; Waits B VBlanks. Same halt/nop pattern MagbWakeAdapter uses; only
-; VBlank is unmasked, so each halt is one frame.
-; Clobbers: A, B
-RitualWait:
-    ld a, b
-    or a, a
-    ret z
-.loop
-    halt
-    nop
-    dec b
-    jr nz, .loop
-    ret
-
-; Waits MAGB_RITUAL_GAP_LONG_FRAMES VBlanks -- more than 255, so it
-; needs a 16-bit counter rather than RitualWait's single byte.
-; Clobbers: A, B, C
-RitualWaitLong:
-    ld bc, MAGB_RITUAL_GAP_LONG_FRAMES
-.loop
-    ld a, b
-    or a, c
-    ret z
-    halt
-    nop
-    dec bc
-    jr .loop
-
-sRitualStepPrefix: db "STEP "
-sRitualStepPrefixEnd:
-
-; Prints "STEP n" so a failure says which of the five sessions broke.
-; Clobbers: everything
-ShowRitualStep:
-    ld hl, wRitualMsg
-    ld de, sRitualStepPrefix
-    ld b, sRitualStepPrefixEnd - sRitualStepPrefix
-.copy
-    ld a, [de]
-    ld [hl+], a
-    inc de
-    dec b
-    jr nz, .copy
-    ld a, [wRitualStep]
-    add a, "0"
-    ld [hl+], a
-    xor a, a
-    ld [hl], a
-    ld hl, wRitualMsg
-    ld de, HTTP_ADDR
-    jp PrintString
-
-sRitualRunning:     db "RITUAL...", 0
-; Same width as sRitualRunning, to blank that line before the test's own
-; output lands on it.
-sRitualBlank:       db "         ", 0
-sRitualChecksumBad: db "RITUAL CFG CKSUM BAD", 0
-
 ; ---- BIG BUFFER (streamed download + upload round-trip) -----------------
 ;
 ; Session/dial/login/DNS wrapper around big_buffer.asm's BbRunTransfer,
@@ -2648,10 +2435,6 @@ RunBufferTestCommon:
     pop hl
     ld de, $9801
     call PrintString
-
-    call SessionRitual
-    or a, a
-    jp nz, .showFail
 
     ld a, [wIspPassword]
     or a, a
@@ -3041,10 +2824,6 @@ RunEmailSendTest:
     ld hl, sSubEmailSend
     ld de, $9801
     call PrintString
-
-    call SessionRitual
-    or a, a
-    jp nz, .showFail
 
     ld a, CMD_SESSION
     call SetCommand
@@ -3637,10 +3416,6 @@ RunEmailRecvTest:
     ld a, [wIspPassword]
     or a, a
     jp z, .noPassword
-
-    call SessionRitual
-    or a, a
-    jp nz, .showFail
 
     ld a, CMD_SESSION
     call SetCommand
@@ -4249,10 +4024,6 @@ RunRawTcpTest:
     ld hl, sRawTcpTitle
     ld de, $9800
     call PrintString
-
-    call SessionRitual
-    or a, a
-    jp nz, .showFail
 
     call MagbBeginSession
     or a, a
@@ -5277,9 +5048,6 @@ wTraceIdxRx: db
 wTraceRowAddr: dw   ; current tilemap row address
 
 SECTION "Menu State", WRAM0
-wRitualStep: db  ; which of the five ritual sessions is running
-wRitualSplit: db ; config-read split for the session in progress
-wRitualMsg: ds 8 ; "STEP n" + NUL
 ; Which transfer routine RunBufferTestCommon should call -- the only
 ; thing that differs between SMALL BUFFER and BIG BUFFER.
 wBufferTestFn: dw

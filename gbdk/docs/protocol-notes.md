@@ -1150,11 +1150,10 @@ sessions, EEPROM reads of varying length, multi-second gaps). That
 changes what a test *is* rather than how fast it runs, and belongs in a
 test of its own.
 
-## The pre-connection ritual
+## What a real Mobile Trainer does before it dials (observed, not implemented)
 
-A real Mobile Trainer does not open a session and dial. The same
-timestamped BGB capture shows **five** sessions, four of them throwaway,
-separated by seconds of silence:
+The same timestamped BGB capture that gave the pacing numbers above also
+shows **five** sessions before the connection, four of them throwaway:
 
 ```
 22.019  Begin -> End                    (43 ms, empty session)
@@ -1168,60 +1167,27 @@ separated by seconds of silence:
 43.991  Begin -> Read Config -> Status -> Call -> PPP -> DNS -> TCP -> HTTP
 ```
 
-Two things in there are protocol-relevant and were not being exercised
-by anything in this TestSuite:
+with the config read split differently each time — `0x80+0x40` in one
+session, `0x60+0x60` in another, for the same 192 bytes.
 
-1. **Repeated Begin/End cycles with no traffic between them.** An
-   adapter that only ever sees one session per power-up has not been
-   tested on session teardown and re-entry.
-2. **The config read is split differently each time.** `0x80+0x40` in
-   one session and `0x60+0x60` in another, for the same 192 bytes. Every
-   other caller in this ROM uses the even split, so an adapter that only
-   handles `0x60+0x60` would pass every other test and fail only here.
-   `magb_read_config()` is now a thin wrapper over
-   `magb_read_config_split()` for exactly this reason, and the ritual
-   ends by checksumming the assembled blob — a garbled reassembly shows
-   up as a checksum failure rather than as five sessions that "worked".
+This is recorded because it is a real observation about how a
+commercial title drives the adapter, and the varying split in
+particular is worth knowing: an adapter implementation that only ever
+handles `0x60+0x60` would satisfy every request this TestSuite makes and
+still be wrong.
 
-**Every test that connects runs it, and only those.** Both ROMs apply
-it to the five ISP tests (Tamago Egg, Small Buffer, Big Buffer, Trainer
-Home, Email Send, Email Recv, Raw TCP) as a prologue.
+**It is deliberately not implemented.** It was, briefly, and that was a
+mistake worth writing down rather than quietly reverting. Reproducing
+the sequence turned a timing reference into a behavioural feature: every
+test grew a ~25 s prologue, and — worse — the primitives stopped being
+primitives. A handshake test that performs four handshakes before the
+one it measures is no longer a handshake test; when the handshake breaks
+it fails inside the prologue and the result no longer says which one
+broke. Diagnostic isolation is what those tests are for.
 
-The boundary took two corrections to find, and both are worth recording
-because they pull in opposite directions.
-
-It started as a separate menu entry. Wrong: a connection reached without
-the ritual is reached by a route no real software takes, which is the
-same argument as the ~400 ms pacing above and applies with more force,
-because the ritual changes the *sequence* rather than only its speed.
-
-Then it ran before *every* test. Also wrong, and caught on hardware:
-the adapter/session and read-config tests exist to exercise one
-primitive in isolation. A handshake test that needs four prior
-handshakes to succeed before it starts is no longer a handshake test —
-when the handshake breaks it now fails inside the prologue, and the
-result stops telling you which one broke. A config-read test that reads
-the config twice before the read it is measuring has the same problem.
-Diagnostic isolation is the entire value of those two, and the ritual
-was destroying it to buy fidelity they do not need: neither of them
-connects, so neither is on the path the capture describes.
-
-P2P is excluded for a weaker but honest reason: the capture is of an ISP
-connection, and there is none of a real ROM placing a P2P call.
-Applying it there would be extrapolation dressed as fidelity.
-
-It costs ~25 s wherever it runs, almost all of it the deliberate gaps.
-That cost is the reason to keep `TEST_RITUAL_GAP_LONG_FRAMES` in mind,
-not a reason to skip the ritual where it belongs.
-
-The ritual stops after the fourth session. The capture's fifth is the
-one the ROM dials from, so it is the test's own Begin Session rather
-than the prologue's — the prologue leaves the adapter idle and hands
-over.
-
-The ~15 s gap is the one number here that is probably not protocol at
-all — almost certainly a person sitting at a menu. It is kept at the
-measured value because fidelity is the point of this particular test,
-and it is a single named constant
-(`TEST_RITUAL_GAP_LONG_FRAMES` / `MAGB_RITUAL_GAP_LONG_FRAMES`) for
-whoever gets tired of it first.
+The capture was reference material for **rhythm**. What was actually
+wanted from it is the pacing above: the TestSuite was running flat out
+where a real client pauses. That is a property of how fast the tests
+move, and it applies everywhere; the session sequence is a property of
+one title's startup, and it belongs in this document rather than in the
+ROMs.
