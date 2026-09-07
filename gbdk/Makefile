@@ -167,16 +167,20 @@ $(BUILD_DIR)/test_config: tests/host/test_config.c src/protocol/magb_config.c | 
 	    tests/host/test_config.c src/protocol/magb_config.c \
 	    -o $@
 
-# Verifies the two runtime invariants the MBC5 banking note above
-# depends on. Both are silent at build time and fatal at runtime, and
-# both are one careless edit away, so check them mechanically rather
-# than by reading the map file by hand:
+# Verifies the three runtime invariants the MBC5 banking note above
+# depends on. All are silent at build time and fatal at runtime, and all
+# are one careless edit away, so check them mechanically rather than by
+# reading the map file by hand:
 #
 #   1. ___sdcc_bcall_ehl (the bank-switch trampoline) must live below
 #      0x4000, or it unmaps itself mid-switch.
 #   2. src/app/gb00_auth.c, the one banked module, must reference no
 #      external symbol other than that trampoline -- anything else it
 #      calls would be in the flat _CODE area that bank 2 displaces.
+#   3. No banked function may be reached by a direct CALL from outside
+#      its bank -- that is what a BANKED annotation mismatch produces,
+#      and it builds cleanly and then parks the CPU at PC=0x0038.
+#      (Needs python3; skipped with a notice if it is not installed.)
 #
 # This needs a -debug build for the .noi symbol file, so it builds into
 # a scratch directory rather than disturbing $(ROM).
@@ -206,6 +210,12 @@ check-banking: toolchain-check | $(BUILD_DIR)
 	    exit 1; \
 	fi; \
 	echo "check-banking: gb00_auth.c is self-contained OK"
+	@if command -v python3 >/dev/null 2>&1; then \
+	    python3 tools/check_far_calls.py \
+	        $(BUILD_DIR)/bankcheck/rom.gbc $(BUILD_DIR)/bankcheck/rom.noi; \
+	else \
+	    echo "check-banking: SKIPPED far-call check (python3 not installed)"; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR)
