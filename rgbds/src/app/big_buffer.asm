@@ -1692,8 +1692,45 @@ sBbUpBytePrefix: db "UP BYTE="
 sBbUpBytePrefixEnd:
 
 ; "UP BYTE=<hh>"
+sBbSrvPrefix: db "SRV "
+sBbSrvPrefixEnd:
+sBbWeLabel:   db " WE "
+sBbWeLabelEnd:
+
+; On an upload rejection the handler echoes, in the response's own
+; X-Test-Checksum, the checksum it computed over what it ACTUALLY
+; received -- already parsed by BbStreamContinue. Printing that beside
+; ours turns "the upload failed" into "the server saw THIS instead",
+; which is the difference between a retry and a diagnosis (a truncated
+; body lands on a recognisably smaller sum). Falls back to the raw
+; verdict byte when the response carried no checksum header.
 BbBuildUploadByteDetail:
     ld hl, wBbDetail1
+    ld a, [wBbChecksumPresent]
+    or a, a
+    jr z, .rawByte
+
+    ld de, sBbSrvPrefix
+    ld b, sBbSrvPrefixEnd - sBbSrvPrefix
+    call BbAppend
+    ld a, [wBbExpected]
+    ld c, a
+    ld a, [wBbExpected + 1]
+    ld b, a
+    call BbAppendHex16
+    ld de, sBbWeLabel
+    ld b, sBbWeLabelEnd - sBbWeLabel
+    call BbAppend
+    ld a, [wBbDlChecksum]
+    ld c, a
+    ld a, [wBbDlChecksum + 1]
+    ld b, a
+    call BbAppendHex16
+    xor a, a
+    ld [hl], a
+    ret
+
+.rawByte
     ld de, sBbUpBytePrefix
     ld b, sBbUpBytePrefixEnd - sBbUpBytePrefix
     call BbAppend
