@@ -2734,6 +2734,20 @@ RunBigBufferTest:
     ld [wExecTimeoutFrames], a
     ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
     ld [wExecTimeoutFrames + 1], a
+    ; MagbDial takes the digit count in B and the string is NOT
+    ; NUL-terminated on the wire, so the length has to be measured
+    ; here. Omitting this sent Call with an empty payload -- libmobile
+    ; answered Error 03 and the session died on timeout, before any
+    ; DNS/TCP could happen.
+    ld hl, wIdentityPhone
+    ld b, 0
+.phoneLenLoop
+    ld a, [hl+]
+    or a, a
+    jr z, .havePhoneLen
+    inc b
+    jr .phoneLenLoop
+.havePhoneLen
     ld hl, wIdentityPhone
     call MagbDial
     or a, a
