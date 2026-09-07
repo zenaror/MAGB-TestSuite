@@ -1392,16 +1392,21 @@ under it. The point of the test is a body an order of magnitude larger
 than anything this ROM can hold: 8192 bytes against a
 `GB00_RESP_BUF_SIZE` of 360.
 
-Download leg: GET the MAGBTEST fixture, take REON's 401, answer it with
-the usual GB00 challenge/response, and stream the body through a running
-16-bit additive checksum — the same algorithm the Mobile Adapter's own
-packet checksum uses — comparing the total against the response's
-`X-Test-Checksum` header. Upload leg: probe with `Content-Length: 0` to
-draw a fresh challenge, then POST the same deterministic pattern
-(`body[i] == i & $FF`, regenerated one chunk at a time, never stored)
-with the download's verified checksum echoed back in its own
-`X-Test-Checksum`; the server's verdict arrives as the first body byte
-(`$01` = accepted).
+Download leg (**two** requests): GET the MAGBTEST fixture, take REON's
+401, answer it with the usual GB00 challenge/response, and stream the
+body through a running 16-bit additive checksum — the same algorithm the
+Mobile Adapter's own packet checksum uses — comparing the total against
+the response's `X-Test-Checksum` header.
+
+Upload leg (**three** requests — `upload.php` authenticates differently
+from `download.php`; see "GB00: download and upload do NOT authenticate
+the same way" in `gbdk/docs/protocol-notes.md`): probe with
+`Content-Length: 0` for a challenge; answer it, still with no body, to
+collect the `Gb-Auth-ID` the server issues; then POST the deterministic
+pattern (`body[i] == i & $FF`, regenerated one chunk at a time, never
+stored) carrying that id, the real `Content-Length`, and the download's
+verified checksum echoed back in `X-Test-Checksum`. The server's verdict
+arrives as the first body byte (`$01` = accepted).
 
 Notes worth keeping:
 
