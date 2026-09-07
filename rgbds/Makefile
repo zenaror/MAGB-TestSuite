@@ -45,7 +45,8 @@ SRCS := \
     src/app/sound.asm \
     src/app/gb00_auth.asm \
     src/app/net_extra.asm \
-    src/app/big_buffer.asm
+    src/app/big_buffer.asm \
+    src/app/save.asm
 
 OBJS := $(patsubst src/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 
@@ -87,7 +88,12 @@ $(BUILD_DIR)/%.o: src/%.asm $(wildcard $(INCLUDE_DIR)/*.inc) | $(BUILD_DIR)
 # it was previously written by hand and had drifted.
 $(ROM): $(OBJS) | $(BUILD_DIR)
 	"$(RGBLINK)" -m $(BUILD_DIR)/size.map -o $(ROM) $(OBJS)
-	"$(RGBFIX)" -Cv -j -l 0x33 -p 0xFF -m 0x00 -t "$(ROM_NAME)" $(ROM)
+	# -m 0x1B/-r 0x02: MBC5 + RAM + BATTERY with one 8 KiB bank. The
+	# mapper is here for the battery, not for extra ROM -- this build
+	# still fits in 32 KiB. It persists the ISP password across power
+	# cycles (src/app/save.asm); see that file on what it means for
+	# the resulting .sav.
+	"$(RGBFIX)" -Cv -j -l 0x33 -p 0xFF -m 0x1B -r 0x02 -t "$(ROM_NAME)" $(ROM)
 	@if [ -d "$(EMU_DIR)" ]; then \
 		cp "$(ROM)" "$(EMU_DIR)/"; \
 		echo "copied $(ROM) -> $(EMU_DIR)/"; \
