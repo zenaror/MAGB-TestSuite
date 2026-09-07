@@ -515,6 +515,11 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
 #define GB00_RESP_BUF_SIZE 360U
 static uint8_t s_gb00_resp[GB00_RESP_BUF_SIZE];
 
+/* The ritual reads the whole config twice at different splits; it needs
+ * somewhere to put it, and reusing a test's own buffer would couple two
+ * unrelated tests. */
+static uint8_t s_ritual_config[MAGB_CONFIG_SIZE];
+
 /* Finds "WWW-Authenticate:" in the accumulated response and copies the
  * GB00_CHALLENGE_LEN-character quoted challenge that follows the next
  * '"' into `out` (NUL-terminated). No strstr() in GBDK's string.h. */
@@ -878,6 +883,104 @@ static bool bb_challenge_auth(uint16_t head_len, const char *login, const char *
     gb00_build_authorization(challenge, login, password, auth_value);
     sprintf(auth_header, "Authorization: GB00 name=\"%s\"\r\n", auth_value);
     return true;
+}
+
+/* ---- The pre-connection ritual ---------------------------------------
+ *
+ * Reproduces what a real Mobile Trainer does before it dials: five
+ * sessions, four of them throwaway, separated by seconds of silence,
+ * with the config read at two DIFFERENT splits of the same 192 bytes.
+ * The measured sequence and the timings are in test_config.h.
+ *
+ * Why this is worth a test of its own rather than a prologue bolted
+ * onto the others: it is ~25 s of mostly waiting, and every other ISP
+ * test would pay that on every run. What it exercises is real, though,
+ * and nothing else here reaches it -- repeated Begin/End cycles with no
+ * traffic in between, and a Read Configuration Data split the rest of
+ * this ROM never sends (0x80+0x40; every other caller uses 0x60+0x60,
+ * so an adapter that only handles the even split would pass everything
+ * else and fail here).
+ *
+ * The capture's fifth session goes on to dial and connect. This test
+ * stops at the end of it: dialling is what every other ISP test already
+ * does, and repeating it here would only add another failure mode to a
+ * test about session sequencing. */
+static bool ritual_empty_session(magb_context_t *ctx, test_result_t *out, uint8_t step)
+{
+    magb_result_t r = magb_begin_session(ctx);
+    if (r != MAGB_OK) {
+        sprintf(out->detail[0], "STEP %hu BEGIN", step);
+        result_fail(out, r, kMsgBeginSessionFailed);
+        return false;
+    }
+    r = magb_end_session(ctx);
+    if (r != MAGB_OK) {
+        sprintf(out->detail[0], "STEP %hu END", step);
+        result_fail(out, r, "END SESSION FAILED");
+        return false;
+    }
+    return true;
+}
+
+static bool ritual_config_session(magb_context_t *ctx, test_result_t *out, uint8_t step,
+                                   uint8_t split)
+{
+    magb_result_t r = magb_begin_session(ctx);
+    if (r != MAGB_OK) {
+        sprintf(out->detail[0], "STEP %hu BEGIN", step);
+        result_fail(out, r, kMsgBeginSessionFailed);
+        return false;
+    }
+    r = magb_read_config_split(ctx, s_ritual_config, split);
+    if (r != MAGB_OK) {
+        sprintf(out->detail[0], "STEP %hu CFG %hx", step, split);
+        result_fail(out, r, kMsgReadConfigFailed);
+        (void)magb_end_session(ctx);
+        return false;
+    }
+    r = magb_end_session(ctx);
+    if (r != MAGB_OK) {
+        sprintf(out->detail[0], "STEP %hu END", step);
+        result_fail(out, r, "END SESSION FAILED");
+        return false;
+    }
+    return true;
+}
+
+void test_session_ritual(magb_context_t *ctx, test_result_t *out)
+{
+    result_init(out, MAGB_CMD_BEGIN_SESSION);
+
+    if (!ritual_empty_session(ctx, out, 1U)) { return; }
+    pace(TEST_RITUAL_GAP_FRAMES);
+
+    if (!ritual_config_session(ctx, out, 2U, TEST_RITUAL_SPLIT_A)) { return; }
+    pace(TEST_RITUAL_GAP_LONG_FRAMES);
+
+    if (!ritual_empty_session(ctx, out, 3U)) { return; }
+    pace(TEST_RITUAL_GAP_FRAMES);
+
+    if (!ritual_config_session(ctx, out, 4U, TEST_RITUAL_SPLIT_B)) { return; }
+    pace(TEST_RITUAL_GAP_FRAMES);
+
+    /* Session 5 is the one a real ROM would dial from. Opening it and
+     * reading the config is the part that belongs to the ritual; what
+     * follows is ordinary ISP work the other tests cover. */
+    if (!ritual_config_session(ctx, out, 5U, TEST_RITUAL_SPLIT_B)) { return; }
+
+    /* Checksum the config we ended up with -- if the varying splits
+     * produced a garbled 192 bytes, this is where it shows, and it is a
+     * far more useful failure than "the sessions all completed". */
+    if (!magb_config_checksum_ok(s_ritual_config)) {
+        result_fail(out, MAGB_ERR_ISP, "CONFIG CHECKSUM BAD");
+        return;
+    }
+
+    out->passed = true;
+    out->result = MAGB_OK;
+    sprintf(out->detail[0], "5 SESSIONS OK");
+    sprintf(out->detail[1], "CFG %hx+%hx OK", (uint8_t)TEST_RITUAL_SPLIT_A,
+            (uint8_t)TEST_RITUAL_SPLIT_B);
 }
 
 /* ---- shared by BIG BUFFER and SMALL BUFFER --------------------------

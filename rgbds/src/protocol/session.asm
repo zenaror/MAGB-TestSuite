@@ -1249,7 +1249,8 @@ MagbTransferData::
 
 SECTION "Config Scratch", WRAM0
 wConfigData:: ds MAGB_CONFIG_SIZE ; full 192-byte blob, filled by MagbReadConfig
-wConfigHalf: db                  ; 0 = first 96 bytes, 1 = second
+wConfigHalf: db                  ; 0 = first chunk, 1 = second
+wConfigFirstLen: db              ; where the 192 bytes are split (see MagbReadConfigSplit)
 wConfigReqPayload: ds 2          ; [offset, length] -- MagbExecute's own request payload
 
 SECTION "Session Code 10", ROM0
@@ -1263,17 +1264,52 @@ SECTION "Session Code 10", ROM0
 ;
 ; Output: A = result (0=OK); on success wConfigData holds the full blob
 ; Clobbers: everything
+; MagbReadConfigSplit reads the same MAGB_CONFIG_SIZE bytes in two
+; requests split at an arbitrary point, because real Mobile Trainer
+; captures show the split is NOT fixed: 0x60+0x60 in one session and
+; 0x80+0x40 in another. An adapter that only ever sees the even split
+; has not really been tested on this command.
+;
+; Input:  A = first chunk length (1..MAGB_CONFIG_SIZE-1)
+; Output: A = result (0=OK); on success wConfigData holds the full blob
+; Clobbers: everything
+; The even-split entry point every non-ritual caller uses. Falls
+; straight into the shared body below -- note the order: the body's
+; local labels belong to MagbReadConfigSplit, so this wrapper has to
+; come first and fall through rather than jump.
 MagbReadConfig::
+    ld a, MAGB_CONFIG_CHUNK
+    ; fall through
+
+MagbReadConfigSplit::
+    ld [wConfigFirstLen], a
+    or a, a
+    jr z, .badSplit
+    cp a, MAGB_CONFIG_SIZE
+    jr c, .splitOk
+.badSplit
+    ld a, MAGB_ERR_BAD_LENGTH
+    ret
+.splitOk
     xor a, a
     ld [wConfigHalf], a
 .halfLoop
+    ; offset = 0 on the first half, first_len on the second;
+    ; chunk = first_len then MAGB_CONFIG_SIZE - first_len.
     ld a, [wConfigHalf]
     and a, a
-    jr z, .offsetIsZero
-    ld a, MAGB_CONFIG_CHUNK
-.offsetIsZero
+    jr z, .firstHalf
+    ld a, [wConfigFirstLen]
     ld [wConfigReqPayload], a
-    ld a, MAGB_CONFIG_CHUNK
+    ld b, a
+    ld a, MAGB_CONFIG_SIZE
+    sub a, b
+    jr .haveChunk
+.firstHalf
+    xor a, a
+    ld [wConfigReqPayload], a
+    ld a, [wConfigFirstLen]
+.haveChunk
     ld [wConfigReqPayload + 1], a
 
     ld a, MAGB_TIMEOUT_FRAMES_SHORT & $FF
@@ -1293,7 +1329,10 @@ MagbReadConfig::
     jr nz, .unexpected
 
     ld a, [wRxPayloadLen]
-    cp a, MAGB_CONFIG_CHUNK + 1
+    ld b, a
+    ld a, [wConfigReqPayload + 1]
+    inc a
+    cp a, b
     jr nz, .badLength
 
     ld a, [wConfigReqPayload]
@@ -1308,7 +1347,8 @@ MagbReadConfig::
     ld de, wConfigData
     add hl, de ; hl = destination in wConfigData
     ld de, wRxPayload + 1 ; source: response payload, past the echoed offset
-    ld b, MAGB_CONFIG_CHUNK
+    ld a, [wConfigReqPayload + 1]
+    ld b, a
 .copyLoop
     ld a, [de]
     ld [hl+], a

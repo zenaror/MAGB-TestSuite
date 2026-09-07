@@ -1149,3 +1149,50 @@ Not reproduced here: Mobile Trainer's pre-connection ritual (short empty
 sessions, EEPROM reads of varying length, multi-second gaps). That
 changes what a test *is* rather than how fast it runs, and belongs in a
 test of its own.
+
+## The pre-connection ritual
+
+A real Mobile Trainer does not open a session and dial. The same
+timestamped BGB capture shows **five** sessions, four of them throwaway,
+separated by seconds of silence:
+
+```
+22.019  Begin -> End                    (43 ms, empty session)
+        ~2 s
+24.115  Begin -> Read Config -> End     (249 ms)
+        ~15 s
+39.511  Begin -> End                    (21 ms, empty session)
+        ~2 s
+41.587  Begin -> Read Config -> End     (299 ms)
+        ~2 s
+43.991  Begin -> Read Config -> Status -> Call -> PPP -> DNS -> TCP -> HTTP
+```
+
+Two things in there are protocol-relevant and were not being exercised
+by anything in this TestSuite:
+
+1. **Repeated Begin/End cycles with no traffic between them.** An
+   adapter that only ever sees one session per power-up has not been
+   tested on session teardown and re-entry.
+2. **The config read is split differently each time.** `0x80+0x40` in
+   one session and `0x60+0x60` in another, for the same 192 bytes. Every
+   other caller in this ROM uses the even split, so an adapter that only
+   handles `0x60+0x60` would pass every other test and fail only here.
+   `magb_read_config()` is now a thin wrapper over
+   `magb_read_config_split()` for exactly this reason, and the ritual
+   ends by checksumming the assembled blob — a garbled reassembly shows
+   up as a checksum failure rather than as five sessions that "worked".
+
+Both ROMs implement this as a **separate test** ("SESSION RITUAL"),
+not as a prologue on every ISP test. It is ~25 s of mostly waiting, and
+every other test would pay that on every run. It neither dials nor
+authenticates, so it needs no ISP password; the capture's fifth session
+goes on to connect, and that part is what every other ISP test already
+covers.
+
+The ~15 s gap is the one number here that is probably not protocol at
+all — almost certainly a person sitting at a menu. It is kept at the
+measured value because fidelity is the point of this particular test,
+and it is a single named constant
+(`TEST_RITUAL_GAP_LONG_FRAMES` / `MAGB_RITUAL_GAP_LONG_FRAMES`) for
+whoever gets tired of it first.

@@ -87,6 +87,19 @@ magb_result_t magb_transfer_data(magb_context_t *ctx, uint8_t conn_id,
 #define MAGB_CONFIG_SIZE 192U
 #define MAGB_CONFIG_CHUNK (MAGB_CONFIG_SIZE / 2U)
 
+/** Reads the 192-byte configuration in two Read Configuration Data
+ * (0x19) calls split at `first_len` bytes.
+ *
+ * Real Mobile Trainer captures show the split is NOT fixed: 0x60+0x60
+ * in one session and 0x80+0x40 in another, for the same 192 bytes. An
+ * adapter implementation that only ever sees one split has not really
+ * been tested on this command, which is why the ritual test varies it
+ * (see test_session_ritual()). */
+magb_result_t magb_read_config_split(magb_context_t *ctx, uint8_t out[MAGB_CONFIG_SIZE],
+                                      uint8_t first_len);
+
+/** magb_read_config_split() with the even MAGB_CONFIG_CHUNK (0x60)
+ * split, which is what every non-ritual caller uses. */
 magb_result_t magb_read_config(magb_context_t *ctx, uint8_t out[MAGB_CONFIG_SIZE]);
 
 /* Field offsets within the 192-byte configuration blob, per the
