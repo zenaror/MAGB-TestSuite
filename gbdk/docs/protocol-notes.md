@@ -1183,17 +1183,36 @@ by anything in this TestSuite:
    ends by checksumming the assembled blob — a garbled reassembly shows
    up as a checksum failure rather than as five sessions that "worked".
 
-**Every test runs it**, as a prologue, in both ROMs. It was briefly a
-separate menu entry instead; that was wrong. A real ROM never talks to
-the adapter without having gone through this first, so a TestSuite that
-reaches the wire by a route no real software takes is not testing what
-real software does — which is the same argument as the ~400 ms block
-pacing above, and it applies with more force here, because the ritual
-changes the *sequence* rather than only its speed.
+**Every test that connects runs it, and only those.** Both ROMs apply
+it to the five ISP tests (Tamago Egg, Small Buffer, Big Buffer, Trainer
+Home, Email Send, Email Recv, Raw TCP) as a prologue.
 
-It costs ~25 s per test run, almost all of it the deliberate gaps. That
-cost is the reason to keep `TEST_RITUAL_GAP_LONG_FRAMES` in mind, not a
-reason to skip the ritual.
+The boundary took two corrections to find, and both are worth recording
+because they pull in opposite directions.
+
+It started as a separate menu entry. Wrong: a connection reached without
+the ritual is reached by a route no real software takes, which is the
+same argument as the ~400 ms pacing above and applies with more force,
+because the ritual changes the *sequence* rather than only its speed.
+
+Then it ran before *every* test. Also wrong, and caught on hardware:
+the adapter/session and read-config tests exist to exercise one
+primitive in isolation. A handshake test that needs four prior
+handshakes to succeed before it starts is no longer a handshake test —
+when the handshake breaks it now fails inside the prologue, and the
+result stops telling you which one broke. A config-read test that reads
+the config twice before the read it is measuring has the same problem.
+Diagnostic isolation is the entire value of those two, and the ritual
+was destroying it to buy fidelity they do not need: neither of them
+connects, so neither is on the path the capture describes.
+
+P2P is excluded for a weaker but honest reason: the capture is of an ISP
+connection, and there is none of a real ROM placing a P2P call.
+Applying it there would be extrapolation dressed as fidelity.
+
+It costs ~25 s wherever it runs, almost all of it the deliberate gaps.
+That cost is the reason to keep `TEST_RITUAL_GAP_LONG_FRAMES` in mind,
+not a reason to skip the ritual where it belongs.
 
 The ritual stops after the fourth session. The capture's fifth is the
 one the ROM dials from, so it is the test's own Begin Session rather
