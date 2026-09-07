@@ -4,6 +4,7 @@
 #include "magb_commands.h"
 #include "test_config.h"
 #include "gb00_auth.h"
+#include "magb_fmt.h"
 #include "serial_hw.h" /* serial_wait_vblanks(), for pace() below */
 
 #include <gb/gb.h> /* vsync(), joypad(); also used for the P2P receive poll spacing below */
@@ -1070,12 +1071,22 @@ void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *
     r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
     if (r != MAGB_OK) { result_fail_code(out, r, kMsgTcpOpenFailed, kCode24000); isp_http_cleanup(ctx, 0U, false, true); return; }
 
-    sprintf(s_bb_req, "POST %s HTTP/1.0\r\nHost: %s\r\n%sContent-Length: %u\r\n"
-                      "X-Test-Checksum: %hx%hx\r\n\r\n",
-            TEST_HTTP_SMALLBUFFER_PATH, TEST_HTTP_HOST, s_bb_auth_header,
-            (uint16_t)TEST_SMALLBUFFER_SIZE,
-            (uint8_t)(dl_checksum >> 8), (uint8_t)(dl_checksum & 0xFFU));
-    req_len = (uint16_t)strlen(s_bb_req);
+    /* Built explicitly, not with sprintf: this is a wire-format header,
+     * and sprintf silently dropped both numeric conversions here --
+     * see magb_fmt.h. */
+    {
+        char *p = s_bb_req;
+        p = magb_fmt_str(p, "POST " TEST_HTTP_SMALLBUFFER_PATH " HTTP/1.0\r\nHost: "
+                            TEST_HTTP_HOST "\r\n");
+        p = magb_fmt_str(p, s_bb_auth_header);
+        p = magb_fmt_str(p, "Content-Length: ");
+        p = magb_fmt_u16(p, (uint16_t)TEST_SMALLBUFFER_SIZE);
+        p = magb_fmt_str(p, "\r\nX-Test-Checksum: ");
+        p = magb_fmt_hex16(p, dl_checksum);
+        p = magb_fmt_str(p, "\r\n\r\n");
+        *p = '\0';
+        req_len = (uint16_t)(p - s_bb_req);
+    }
     /* Exceeds one Transfer Data payload -- see tcp_send_all(). */
     r = tcp_send_all(ctx, conn_id, (const uint8_t *)s_bb_req, req_len);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD HDR SEND FAIL", conn_id); return; }
@@ -1202,11 +1213,21 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
 
     /* Request 3: the real upload, identified by Gb-Auth-ID rather than
      * by repeating the Authorization value. */
-    sprintf(s_bb_req, "POST %s HTTP/1.0\r\nHost: %s\r\nGb-Auth-ID: %s\r\n"
-                 "Content-Length: %u\r\nX-Test-Checksum: %hx%hx\r\n\r\n",
-            TEST_HTTP_BIGBUFFER_UPLOAD_PATH, TEST_HTTP_HOST, s_bb_auth_id,
-            TEST_BIGBUFFER_SIZE, (uint8_t)(dl_checksum >> 8), (uint8_t)(dl_checksum & 0xFFU));
-    req_len = (uint16_t)strlen(s_bb_req);
+    /* Explicit, for the same reason as the small buffer's -- see
+     * magb_fmt.h. */
+    {
+        char *p = s_bb_req;
+        p = magb_fmt_str(p, "POST " TEST_HTTP_BIGBUFFER_UPLOAD_PATH " HTTP/1.0\r\nHost: "
+                            TEST_HTTP_HOST "\r\nGb-Auth-ID: ");
+        p = magb_fmt_str(p, s_bb_auth_id);
+        p = magb_fmt_str(p, "\r\nContent-Length: ");
+        p = magb_fmt_u16(p, (uint16_t)TEST_BIGBUFFER_SIZE);
+        p = magb_fmt_str(p, "\r\nX-Test-Checksum: ");
+        p = magb_fmt_hex16(p, dl_checksum);
+        p = magb_fmt_str(p, "\r\n\r\n");
+        *p = '\0';
+        req_len = (uint16_t)(p - s_bb_req);
+    }
     /* Can exceed one Transfer Data payload -- see tcp_send_all(). */
     r = tcp_send_all(ctx, conn_id, (const uint8_t *)s_bb_req, req_len);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD HDR SEND FAIL", conn_id); return; }
@@ -1275,6 +1296,23 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
  * constants here -- they're read from the adapter's own Read
  * Configuration Data (0x19) response, exactly like a real game would
  * (and per the project owner's own suggestion). */
+
+/* Builds a POP3 command that carries a message number, explicitly
+ * rather than with sprintf.
+ *
+ * These are wire commands with a number in them -- the same shape that
+ * silently lost its digits on the BIG/SMALL BUFFER headers (see
+ * magb_fmt.h). A "TOP  0" with the number missing is a malformed
+ * command, and a server answering -ERR to it reads as "the mailbox is
+ * wrong" rather than "we sent nonsense", which is the kind of wrong
+ * trail this file has followed before. */
+static void pop3_numbered_cmd(char *line, const char *verb, uint16_t n, const char *tail)
+{
+    char *p = magb_fmt_str(line, verb);
+    p = magb_fmt_u16(p, n);
+    p = magb_fmt_str(p, tail);
+    *p = '\0';
+}
 
 static uint16_t parse_leading_uint(const char *s)
 {
@@ -1624,7 +1662,7 @@ static uint8_t delete_matching_test_emails(magb_context_t *ctx, uint8_t conn_id,
         uint8_t header_lines;
         magb_result_t r;
 
-        sprintf(line, "TOP %u 0\r\n", msg);
+        pop3_numbered_cmd(line, "TOP ", msg, " 0\r\n");
         if (!line_step(ctx, conn_id, line, line, line_cap, "+OK", &r, remote_closed)) {
             if (*remote_closed || r != MAGB_OK) {
                 break;
@@ -1649,7 +1687,7 @@ static uint8_t delete_matching_test_emails(magb_context_t *ctx, uint8_t conn_id,
         }
 
         if (matched) {
-            sprintf(line, "DELE %u\r\n", msg);
+            pop3_numbered_cmd(line, "DELE ", msg, "\r\n");
             if (line_step(ctx, conn_id, line, line, line_cap, "+OK", &r, remote_closed)) {
                 deleted++;
             }

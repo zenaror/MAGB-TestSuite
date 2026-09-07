@@ -1193,3 +1193,45 @@ where a real client pauses. That is a property of how fast the tests
 move, and it applies everywhere; the session sequence is a property of
 one title's startup, and it belongs in this document rather than in the
 ROMs.
+
+## Wire-format numbers are built explicitly, not with sprintf
+
+The SMALL BUFFER upload failed on hardware while the RGBDS one passed
+against the same server, which localised it to the GBDK ROM. The link
+logs put the finger on it precisely: the POST header goes out in two
+Transfer Data chunks of 253 + 11 bytes, and the RGBDS ROM's second chunk
+read `m: 1FC0\r\n\r\n` while the GBDK ROM's was nothing but CRLFs.
+
+The GBDK request was **seven bytes shorter** — exactly the three digits
+of `128` and the four of `1fc0`. Both numeric conversions in
+
+```c
+sprintf(req, "...Content-Length: %u\r\nX-Test-Checksum: %hx%hx\r\n\r\n", ...)
+```
+
+produced nothing. The server therefore saw `Content-Length:` with an
+empty value, forwarded no body to PHP, and answered with the checksum of
+an empty body (`0000`) — which looks exactly like a rejected upload
+rather than a malformed request. Nothing warned; the ROM built clean and
+the failure surfaced three layers away from its cause.
+
+Both formats are documented as supported by GBDK's `stdio.h`, and both
+arguments were explicitly cast as its docs require. Chasing the precise
+quirk is beside the point: **a TestSuite whose job is putting exact
+bytes on a wire should not derive those bytes from a formatter it cannot
+test.** `magb_fmt.h`/`magb_fmt.c` are plain C with an explicit width,
+and `tests/host/test_fmt.c` checks them on the host — including the
+leading-zero cases (`0x0F00` must be `"0F00"`, never `"F00"`) that only
+bite for one checksum value in sixteen and would otherwise wait to be
+found by a confusing failure much later.
+
+Applied to every wire string with a number in it, not just the one that
+broke: both buffer uploads' headers, and POP3's `TOP n 0` / `DELE n`.
+Those last two matter because a `TOP  0` with the number missing is a
+malformed command, and a server answering `-ERR` to it reads as "the
+mailbox is wrong" rather than "we sent nonsense" — the kind of wrong
+trail this file has followed before.
+
+Side effect worth noting: the GBDK ROM now emits **uppercase** hex, like
+the RGBDS one always did. The two had disagreed, and only REON's
+`strtoupper()` on the client header hid it.
