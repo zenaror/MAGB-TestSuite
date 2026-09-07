@@ -1543,17 +1543,20 @@ half of the same answer.)
 Not runtime-verified.
 
 
-## The session ritual runs before every test
+## The session ritual runs before every test that connects
 
 See `gbdk/docs/protocol-notes.md`, "The pre-connection ritual", for the
 capture it comes from. On this side it is `SessionRitual` in
 `src/main.asm`, called from all seven tests right after each draws its
 title and before its own `MagbBeginSession`.
 
-It was briefly a separate menu entry. That was wrong: a real ROM never
-talks to the adapter without having gone through it first, so reaching
-the wire by a route no real software takes is not testing what real
-software does. Every test now pays the ~25 s.
+It applies to the five tests that connect, and deliberately not to
+`RunAdapterSessionTest` or `RunReadConfigTest`. Those two exist to
+exercise one primitive in isolation, and a handshake test that needs
+four prior handshakes before it starts is no longer a handshake test —
+it fails inside the prologue and stops telling you what broke. P2P is
+excluded as well: the capture is of an ISP connection, and there is
+none of a real ROM placing a P2P call.
 
 On failure the ritual prints `STEP n` at `HTTP_ADDR` and returns the
 `MAGB_ERR_*`, which each caller feeds to its existing failure handler —

@@ -164,7 +164,6 @@ void test_adapter_session(magb_context_t *ctx, test_result_t *out)
     magb_result_t r;
 
     result_init(out, MAGB_CMD_BEGIN_SESSION);
-    if (!session_ritual(ctx, out)) { return; }
 
     r = magb_begin_session(ctx);
     out->result = r;
@@ -190,7 +189,6 @@ void test_read_config(magb_context_t *ctx, uint8_t config_out[MAGB_CONFIG_SIZE],
     magb_result_t r;
 
     result_init(out, MAGB_CMD_READ_CONFIG);
-    if (!session_ritual(ctx, out)) { return; }
 
     if (!ctx->session_active) {
         r = magb_begin_session(ctx);
@@ -961,11 +959,30 @@ static bool ritual_config_session(magb_context_t *ctx, test_result_t *out, uint8
 /* Runs the ritual. Reports into `out` and returns false if any of it
  * failed, so a caller can bail before its own work starts.
  *
- * Every test calls this, which is the point: a real ROM never talks to
- * the adapter without having gone through it first, so a TestSuite that
- * skips it is not testing what real software does. It costs ~25 s per
- * run, almost all of it the deliberate gaps; TEST_RITUAL_GAP_LONG_FRAMES
- * is where most of that sits. */
+ * Every test that CONNECTS calls this, and only those. That boundary
+ * matters in both directions.
+ *
+ * The captured ritual is what a real ROM does before it dials, so a
+ * connection reached without it is reached by a route no real software
+ * takes -- the ISP tests all run it for the same reason they pace their
+ * receives.
+ *
+ * But test_adapter_session() and test_read_config() deliberately do
+ * NOT, and forcing it on them was a real mistake, caught on hardware.
+ * Those two exist to exercise one primitive in isolation. A handshake
+ * test that needs four prior handshakes to succeed before it starts is
+ * no longer a handshake test: when the handshake is broken it now fails
+ * inside the prologue, and the result no longer tells you which one
+ * broke. A config-read test that reads the config twice before the read
+ * it is measuring has the same problem. Diagnostic isolation is the
+ * whole value of those two.
+ *
+ * P2P is excluded too, for a weaker but honest reason: the capture is
+ * of an ISP connection, and there is none of a real ROM placing a P2P
+ * call. Applying it there would be extrapolation dressed as fidelity.
+ *
+ * Costs ~25 s wherever it runs, almost all of it the deliberate gaps;
+ * TEST_RITUAL_GAP_LONG_FRAMES is where most of that sits. */
 bool session_ritual(magb_context_t *ctx, test_result_t *out)
 {
     if (!ritual_empty_session(ctx, out, 1U)) { return false; }
@@ -2217,7 +2234,6 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
     magb_result_t r;
 
     result_init(out, MAGB_CMD_DIAL);
-    if (!session_ritual(ctx, out)) { return; }
 
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
@@ -2287,7 +2303,6 @@ void test_p2p_listener(magb_context_t *ctx, test_result_t *out)
     magb_result_t r;
 
     result_init(out, MAGB_CMD_WAIT_CALL);
-    if (!session_ritual(ctx, out)) { return; }
 
     r = magb_begin_session(ctx);
     if (r != MAGB_OK) { result_fail(out, r, kMsgBeginSessionFailed); return; }
