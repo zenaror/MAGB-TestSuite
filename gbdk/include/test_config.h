@@ -203,6 +203,42 @@
 #define TEST_PACING_RECV_FRAMES 24U /* ~400 ms between blocks of one transfer */
 #define TEST_PACING_IDLE_FRAMES 60U /* ~1 s between idle polls */
 
+/* ---- The pre-connection ritual -----------------------------------------
+ *
+ * Before it dials, a real Mobile Trainer does not just open a session
+ * and go. The same BGB capture shows five sessions, four of them
+ * throwaway, with seconds of silence between them:
+ *
+ *   22.019  Begin -> End                       (43 ms, empty session)
+ *           ~2 s
+ *   24.115  Begin -> Read Config -> End        (249 ms)
+ *           ~15 s
+ *   39.511  Begin -> End                       (21 ms, empty session)
+ *           ~2 s
+ *   41.587  Begin -> Read Config -> End        (299 ms)
+ *           ~2 s
+ *   43.991  Begin -> Read Config -> Status -> Call -> ... (the real one)
+ *
+ * and the two config reads use DIFFERENT splits of the same 192 bytes
+ * (0x80+0x40 in one, 0x60+0x60 in the other).
+ *
+ * TEST_RITUAL_GAP_LONG_FRAMES is the odd one out. The ~15 s gap is
+ * almost certainly a person sitting at a menu, not protocol behaviour,
+ * and it is the whole reason the ritual costs ~25 s to run. It is kept
+ * at the measured value because the point of this test is fidelity, but
+ * it is the first thing to shorten if that becomes annoying:
+ *
+ *   make CFLAGS_EXTRA=-DTEST_RITUAL_GAP_LONG_FRAMES=120
+ */
+#define TEST_RITUAL_GAP_FRAMES      120U /* ~2 s between sessions */
+#define TEST_RITUAL_GAP_LONG_FRAMES 900U /* ~15 s -- a human at a menu */
+
+/* The two config-read splits the capture shows, as first-chunk lengths.
+ * 0x60 is what every other caller uses; 0x80 is only ever exercised
+ * here, which is the point. */
+#define TEST_RITUAL_SPLIT_A 0x80U
+#define TEST_RITUAL_SPLIT_B 0x60U
+
 /* Mobile Trainer's real home page -- Dan Docs' "Mobile Trainer"
  * section documents this exact observed URL
  * (http://gameboy.datacenter.ne.jp/01/CGB-B9AJ/index.html,
