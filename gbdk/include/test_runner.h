@@ -50,19 +50,21 @@ void test_adapter_session(magb_context_t *ctx, test_result_t *out);
 void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password,
                     const char *host, uint16_t port, const char *path);
 
-/** The "NEWS ARTICLE" test: like test_isp_http(), but performs REON's
- * GB00 challenge/response HTTP authentication (see docs/protocol-
- * notes.md, "GB00 HTTP authentication") and the real game's full
- * two-request flow in one ISP session -- fetches
- * TEST_HTTP_NEWS_CONFIG_PATH (news size/SRAM-address/ranking-layout
- * metadata) first, then TEST_HTTP_NEWS_PATH (the actual news content),
- * each with its own GB00 challenge/response, sharing a single DNS
- * Query for TEST_HTTP_HOST. The GB00 login is the same live-config
- * login ID test_isp_http() uses; `password` is the same account
- * password. (A standalone "NEWS CONFIG" test used to exist for just
- * the first fetch in isolation -- removed as redundant once this test
- * already exercises the same fetch on its way to the article.) */
-void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *password);
+
+/** The "SMALL BUFFER" test: the small half of the synthetic pair that
+ * replaced the Pokemon-data "NEWS ARTICLE" test. One GB00-authenticated
+ * download of TEST_SMALLBUFFER_SIZE bytes -- small enough to arrive in
+ * a single Transfer Data response, so it covers the no-streaming,
+ * no-chunking regime BIG BUFFER never touches -- followed by a POST of
+ * the same pattern back to the SAME URL, reusing the GET's
+ * Authorization with no second challenge.
+ *
+ * That reuse is the point: this path goes through REON's doAuth(2)
+ * ("utility" auth), whose 15-minute session cache exists precisely so
+ * the official client can POST after authenticating once. Nothing else
+ * in this TestSuite exercises it. See test_runner.c for the full
+ * comparison against BIG BUFFER's doAuth(1)/type-0 route. */
+void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *password);
 
 /** The "BIG BUFFER" test: same GB00 challenge/response auth as NEWS
  * ARTICLE, but against REON's dedicated MAGBTEST fixture instead of a
