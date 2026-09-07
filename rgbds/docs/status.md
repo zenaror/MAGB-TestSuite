@@ -1495,3 +1495,49 @@ ROMX 9101 free (was 9730 before SMALL BUFFER, 6288 used at its peak),
 WRAM0 390 free (was 123).
 
 Not runtime-verified yet.
+
+## Cartridge save (MBC5 + RAM + BATTERY)
+
+This ROM was mapperless (cart type `$00`) for its whole life; it is now
+`$1B` with one 8 KiB RAM bank. The mapper is here **for the battery,
+not for space** — the build still fits in 32 KiB with ~3.9 KiB of ROM0
+to spare. What it buys is that the ISP password survives a power cycle
+instead of having to be retyped every boot.
+
+`src/app/save.asm` is a port of gbdk's `src/app/save.c`, byte-identical
+on-cart format, so the rules only have to be right once:
+
+```
+0   'M'      2  layout version     4..  password bytes
+1   'A'      3  length (0..8)      4+n  additive checksum of 0..4+n-1
+```
+
+Boot reads it into `wIspPassword` before the menu appears; the editor
+writes it back, but only when the user confirms with A (`EditText` now
+returns 1/0 for confirm/cancel, matching gbdk's `ui_edit_text()`
+returning `bool`, so cancelling leaves the stored value alone).
+
+What did **not** change is the refusal to guess. There is still no
+compiled-in default. A record that fails its magic, version or checksum
+check loads as empty and the authenticating tests still refuse to run,
+because uninitialized cart RAM is arbitrary bytes and "looks like a
+password" is not good enough — silently loading garbage would recreate
+the failure that made a guessed default worth deleting in the first
+place. The length is validated against both the format's cap and the
+caller's buffer before it is used to index anything; it comes out of
+battery-backed RAM, which is as untrusted as any other external input.
+
+**The `.sav` holds a real credential in plain text.** There is nothing
+on a Game Boy to encrypt it with, and a cart's owner can always read its
+own save RAM. Don't commit it or attach it to a bug report. The repo's
+`.gitignore` already excludes the whole emulator working directory,
+which is where BGB writes it.
+
+One new risk worth naming: on a mapperless ROM a stray write into
+`$0000-$7FFF` was harmless, and now it reaches the MBC — a write to
+`$2000-$3FFF` would switch ROM banks mid-execution. Checked: no literal
+ROM-address write exists anywhere outside `save.asm`. (The GBDK ROM has
+been running on MBC5 for a while and passes, which is the empirical
+half of the same answer.)
+
+Not runtime-verified.

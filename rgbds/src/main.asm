@@ -112,6 +112,12 @@ EntryPoint:
     ld [wMenuSelected], a
     ld [wIspPassword], a ; starts empty -- WRAM isn't guaranteed zeroed at boot
 
+    ; Prefill from the cart save. Leaves wIspPassword empty (and returns
+    ; 0, ignored here) if there is no valid record -- see save.asm.
+    ld hl, wIspPassword
+    ld b, ISP_PASSWORD_MAX_LEN + 1
+    call SaveLoadPassword
+
     ld hl, sP2pDefaultNumber
     ld de, wP2pNumber
     ld b, 13
@@ -838,23 +844,29 @@ sSlotIdLabel:    db "SLOT 1 ID:", 0
 ; ---- ISP PASSWORD (menu item) ----------------------------------------
 ;
 ; Real ISP account password, edited in place with EditText below and
-; kept only in wIspPassword -- matches gbdk's own isp_password[]:
-; starts EMPTY (no compiled-in default; a real account secret is never
-; a guessable constant, repo-root memory's "Never invent credentials"),
-; RAM-only (this ROM has no mapper/save, resets to empty on power-off),
-; capped at ISP_PASSWORD_MAX_LEN(8) matching gbdk's
-; TEST_ISP_PASSWORD_MAX_LEN. Nothing on this side reads it yet -- no
-; GB00-authenticated test (News/Email/Trainer Home) has been ported
-; here (see docs/status.md) -- so this editor is real and functional on
-; its own terms, just not wired to a consumer yet, the same shape as
-; gbdk's UI_MENU_ISP_PASSWORD case in main.c before any GB00 test runs.
+; held in wIspPassword -- matches gbdk's own isp_password[]. Still no
+; compiled-in default: a real account secret is never a guessable
+; constant (repo-root memory's "Never invent credentials"), and the
+; GB00-authenticated tests refuse to run rather than send a guess.
+; Capped at ISP_PASSWORD_MAX_LEN(8), matching gbdk's
+; TEST_ISP_PASSWORD_MAX_LEN.
+;
+; No longer RAM-only: it is restored from battery-backed cart SRAM at
+; boot and written back whenever the editor is confirmed (save.asm --
+; and note what that file says about the resulting .sav). An absent or
+; unreadable save still leaves this empty, which is the behaviour that
+; makes a missing password visible instead of silent.
 DEF ISP_PASSWORD_MAX_LEN EQU 8
 
 RunIspPasswordEdit:
     ld hl, wIspPassword
     ld b, ISP_PASSWORD_MAX_LEN + 1 ; buf_cap, including the NUL
     ld de, sMenuIspPassword
-    jp EditText
+    call EditText
+    or a, a
+    ret z ; cancelled -- leave the stored password alone
+    ld hl, wIspPassword
+    jp SaveStorePassword
 
 ; In-place editor for a short fixed-capacity text field -- UP/DOWN
 ; cycles the character under the cursor through sTextCharset below
@@ -871,6 +883,10 @@ RunIspPasswordEdit:
 ; Input: HL = buffer (NUL-terminated on entry, may be empty), B = buffer
 ;        capacity including the NUL (capped at EDIT_TEXT_MAX_LEN+1),
 ;        DE = label string pointer
+; Output: A = 1 if the user confirmed with A (buffer updated, trailing
+;         spaces trimmed), 0 if they cancelled with B (buffer untouched)
+;         -- matches gbdk's ui_edit_text() returning bool, and lets the
+;         password editor skip writing the save on a cancel.
 ; Clobbers: everything
 DEF EDIT_TEXT_MAX_LEN EQU 20 ; matches gbdk's UI_EDIT_TEXT_MAX_LEN
 
@@ -1055,12 +1071,14 @@ EditText:
 .copyDone
     xor a, a
     ld [de], a
+    ld a, 1 ; confirmed
     ret
 
 .checkB
     ld a, b
     and a, PAD_B
     jp z, .loop
+    xor a, a ; cancelled -- buffer left untouched
     ret
 
 ; Redraws the whole edit screen: label, the work-in-progress text, the
