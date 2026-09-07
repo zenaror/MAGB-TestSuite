@@ -99,6 +99,7 @@ either, and it states explicitly which parts are GBDK-specific.
 ├── LICENSE
 ├── config.bin         real captured Mobile Adapter config, provisioned locally (see gbdk/docs/testing.md)
 ├── emulador/           shared local emulator working dir, e.g. a BGB install
+├── server/             REON fixtures the buffer tests need — see server/README.md
 ├── gbdk/               C / GBDK-2020 implementation — see gbdk/README.md
 └── rgbds/              SM83 assembly / RGBDS implementation — see rgbds/README.md
 ```
@@ -107,6 +108,12 @@ either, and it states explicitly which parts are GBDK-specific.
 than duplicated per directory — see
 [`gbdk/docs/testing.md`](gbdk/docs/testing.md) for how each is used
 and provisioned. Neither is part of this repository.
+
+`server/` is: it holds the synthetic REON endpoints the SMALL BUFFER and
+BIG BUFFER tests talk to. They are not needed to build either ROM, only
+to pass those two tests, and they are checked in so the tests are
+reproducible on any REON host rather than on one particular person's —
+see [`server/README.md`](server/README.md).
 
 ## License
 
