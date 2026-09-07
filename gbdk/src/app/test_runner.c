@@ -1375,13 +1375,19 @@ static magb_result_t tcp_recv_line(magb_context_t *ctx, uint8_t conn_id,
 
     /* Deliberately NOT paced at TEST_PACING_RECV_FRAMES, unlike the
      * HTTP paths. The Mobile Trainer measurements those come from are
-     * of HTTP block transfers; SMTP/POP3 are line-at-a-time protocols
-     * with no comparable capture. More to the point, REON's POP3 path
-     * has a known race -- its `+OK` for PASS is emitted outside the
-     * callback that populates the maildrop, so a fast client can get
-     * `STAT 0 0` on a full mailbox. Pacing these loops would hide it.
-     * A TestSuite that stops reaching a real defect has been made
-     * worse, so this half deliberately keeps running flat out. */
+     * of HTTP block transfers; SMTP/POP3 are line-at-a-time protocols,
+     * and no comparable capture of one exists -- pacing these loops
+     * would mean inventing a number, which is the opposite of what the
+     * HTTP pacing is.
+     *
+     * Running them flat out is also worth something on its own. REON
+     * had a race here (its `+OK` for PASS was emitted outside the
+     * callback that populates the maildrop, so a fast client got
+     * `STAT 0 0` on a full mailbox) that a paced client would never
+     * have reached; it has since been fixed upstream, but this
+     * TestSuite exists to validate any adapter or REON-compatible
+     * service, not one server, and the fast regime is where that class
+     * of bug lives. */
     for (poll = 0U; poll < LINE_RECV_MAX_POLLS; poll++) {
         uint8_t got_len;
         bool closed = false;

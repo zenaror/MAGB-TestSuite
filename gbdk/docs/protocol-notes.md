@@ -1134,13 +1134,15 @@ paths no real client ever takes, and stops exercising the ones it does.
 different:
 
 - **SMTP/POP3 line receive.** The measurements above are of HTTP block
-  transfers; there is no comparable capture of a line-at-a-time
-  protocol. More importantly, REON's POP3 path has a known race — its
-  `+OK` for `PASS` is emitted outside the callback that populates the
-  maildrop, so a fast client can get `STAT 0 0` on a full mailbox, which
-  the real Mobile Trainer never sees. Pacing these loops would hide a
-  real defect, and a TestSuite that stops reaching one has been made
-  worse.
+  transfers, and no comparable capture of a line-at-a-time protocol
+  exists — pacing these would mean inventing a number, which is the
+  opposite of what the HTTP pacing is. Running them flat out also has
+  value of its own: REON had a race here (`+OK` for `PASS` emitted
+  outside the callback that populates the maildrop, so a fast client got
+  `STAT 0 0` on a full mailbox) that a paced client would never have
+  reached. It has since been fixed upstream, but this TestSuite exists
+  to validate any adapter or REON-compatible service rather than one
+  server, and the fast regime is where that class of bug lives.
 - **RAW TCP's live view.** It is an interactive window onto whatever
   someone types at `nc`, not a fidelity test; a one-second poll would
   make it feel broken. It stays at one frame.
