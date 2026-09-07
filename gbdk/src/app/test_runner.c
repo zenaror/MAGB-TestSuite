@@ -40,7 +40,7 @@ static const char kMsgPhoneStatusFailed[]  = "PHONE STATUS FAIL";
 static const char kMsgEchoSendFailed[]     = "ECHO SEND FAIL";
 static const char kMsgHelloWorldOk[]       = "HELLO WORLD OK";
 static const char kMsgNoCall[]             = "NOCALL";
-static const char kMsgBadTestFrame[]       = "BAD FRAME";
+static const char kMsgBadTestFrame[]       = "BAD P2P FRAME";
 static const char kHelloWorld[]            = "HELLO WORLD";
 
 /* Official Nintendo Mobile Adapter error codes (docs/protocol-notes.md)
@@ -175,7 +175,7 @@ void test_adapter_session(magb_context_t *ctx, test_result_t *out)
 
     out->passed = true;
     sprintf(out->detail[0], "ADAPTER ID: %hx", (unsigned char)ctx->adapter_device);
-    sprintf(out->detail[1], "NIN ECHO OK");
+    sprintf(out->detail[1], "NINTENDO ECHO OK");
 
     (void)magb_end_session(ctx);
 }
@@ -1562,33 +1562,33 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
 
     r = tcp_recv_line(ctx, conn_id, line, sizeof(line), &remote_closed);
     if (r != MAGB_OK || strncmp(line, "220", 3) != 0) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "NO SMTP GREET");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "NO SMTP GREETING");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     if (!line_step(ctx, conn_id, "HELO magbtestsuite\r\n", line, sizeof(line), "250", &r, &remote_closed)) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "HELO REJ");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "HELO REJECTED");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     sprintf(line, "MAIL FROM:<%s>\r\n", id.email);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "250", &r, &remote_closed)) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MAIL FROM REJ");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MAIL FROM REJECTED");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     sprintf(line, "RCPT TO:<%s>\r\n", id.email);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "250", &r, &remote_closed)) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "RCPT TO REJ");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "RCPT TO REJECTED");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     if (!line_step(ctx, conn_id, "DATA\r\n", line, sizeof(line), "354", &r, &remote_closed)) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "DATA REJ");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "DATA REJECTED");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
@@ -1618,7 +1618,7 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
             ".\r\n",
             id.email, id.email);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "250", &r, &remote_closed)) {
-        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MSG REJ");
+        result_fail(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "MESSAGE REJECTED");
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
@@ -1786,26 +1786,26 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
 
     r = tcp_recv_line(ctx, conn_id, line, sizeof(line), &remote_closed);
     if (r != MAGB_OK || strncmp(line, "+OK", 3) != 0) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "NO POP3 GREET", kCode31002);
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "NO POP3 GREETING", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     sprintf(line, "USER %s\r\n", user);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "+OK", &r, &remote_closed)) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "USER REJ", kCode31002);
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "USER REJECTED", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
     sprintf(line, "PASS %s\r\n", password);
     if (!line_step(ctx, conn_id, line, line, sizeof(line), "+OK", &r, &remote_closed)) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "LOGIN FAIL", kCode31002);
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "LOGIN FAILED", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
 
     if (!line_step(ctx, conn_id, "STAT\r\n", line, sizeof(line), "+OK", &r, &remote_closed)) {
-        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "STAT FAIL", kCode31002);
+        result_fail_code(out, (r == MAGB_OK) ? MAGB_ERR_ISP : r, "STAT FAILED", kCode31002);
         isp_http_cleanup(ctx, conn_id, true, true);
         return;
     }
