@@ -2360,7 +2360,7 @@ RunIspHttpCore:
 ; is not just a rename: it keeps the doAuth(2) coverage NEWS ARTICLE was
 ; the only holder of, and adds the Authorization-reuse POST that nothing
 ; exercised before (see big_buffer.asm's SMALL BUFFER header).
-DEF ISP_SUBMENU_COUNT EQU 7
+DEF ISP_SUBMENU_COUNT EQU 8
 
 IspSubMenuItemAddrs: ; rows 2-8, column 0 (cursor); matches gotoxy(0, 2+i)
     dw $9840
@@ -2370,6 +2370,7 @@ IspSubMenuItemAddrs: ; rows 2-8, column 0 (cursor); matches gotoxy(0, 2+i)
     dw $98C0
     dw $98E0
     dw $9900
+    dw $9920
 
 ; Exact wording/order matches gbdk's kIspLabels[] in src/main.c.
 IspSubMenuLabels:
@@ -2380,6 +2381,7 @@ IspSubMenuLabels:
     dw sSubEmailSend
     dw sSubEmailRecv
     dw sSubRawTcp
+    dw sSubSessionRitual
 
 IspSubMenuHandlers:
     dw RunTamagoEggTest
@@ -2389,6 +2391,7 @@ IspSubMenuHandlers:
     dw RunEmailSendTest
     dw RunEmailRecvTest
     dw RunRawTcpTest
+    dw RunSessionRitualTest
 
 sSubTamagoEgg:   db "TAMAGO EGG", 0
 sSubSmallBuffer: db "SMALL BUFFER", 0
@@ -2401,6 +2404,205 @@ sIspSubMenuTitle: db "ISP/HTTP", 0
 sSubMenuFooter:   db "A:RUN B:BACK", 0
 
 sSetIspPassword: db "SET ISP PASSWORD", 0
+
+; ---- SESSION RITUAL ----------------------------------------------------
+;
+; Reproduces what a real Mobile Trainer does before it dials: five
+; sessions, four of them throwaway, separated by seconds of silence,
+; with the config read at two DIFFERENT splits of the same 192 bytes.
+; The measured sequence and the timings are in protocol.inc.
+;
+; Why a test of its own rather than a prologue bolted onto the others:
+; it is ~25 s of mostly waiting, and every ISP test would pay that on
+; every run. What it exercises is real, though, and nothing else here
+; reaches it -- repeated Begin/End cycles with no traffic in between,
+; and a Read Configuration Data split the rest of this ROM never sends
+; ($80+$40; every other caller uses $60+$60, so an adapter that only
+; handles the even split passes everything else and fails here).
+;
+; The capture's fifth session goes on to dial and connect. This stops at
+; the end of it: dialling is what every other ISP test already does, and
+; repeating it here would only add another failure mode to a test about
+; session sequencing. Needs no ISP password -- nothing here
+; authenticates or dials.
+; Clobbers: everything
+RunSessionRitualTest:
+    call ClearTextScreen
+    ld hl, sSubSessionRitual
+    ld de, $9801
+    call PrintString
+    ld hl, sRitualRunning
+    ld de, HTTP_ADDR
+    call PrintString
+
+    ld a, CMD_SESSION
+    call SetCommand
+    ld a, STATUS_WAKE
+    call SetStatus
+
+    ld a, 1
+    ld [wRitualStep], a
+    call RitualEmptySession
+    or a, a
+    jr nz, .fail
+    ld b, MAGB_RITUAL_GAP_FRAMES
+    call RitualWait
+
+    ld a, 2
+    ld [wRitualStep], a
+    ld a, MAGB_RITUAL_SPLIT_A
+    call RitualConfigSession
+    or a, a
+    jr nz, .fail
+    call RitualWaitLong ; loads its own 16-bit count
+
+    ld a, 3
+    ld [wRitualStep], a
+    call RitualEmptySession
+    or a, a
+    jr nz, .fail
+    ld b, MAGB_RITUAL_GAP_FRAMES
+    call RitualWait
+
+    ld a, 4
+    ld [wRitualStep], a
+    ld a, MAGB_RITUAL_SPLIT_B
+    call RitualConfigSession
+    or a, a
+    jr nz, .fail
+    ld b, MAGB_RITUAL_GAP_FRAMES
+    call RitualWait
+
+    ld a, 5
+    ld [wRitualStep], a
+    ld a, MAGB_RITUAL_SPLIT_B
+    call RitualConfigSession
+    or a, a
+    jr nz, .fail
+
+    ; If the varying splits produced a garbled 192 bytes, this is where
+    ; it shows -- a far more useful failure than "the sessions all
+    ; completed".
+    ld hl, wConfigData
+    call MagbConfigChecksumOk
+    or a, a
+    jr z, .badChecksum
+
+    call SoundSuccess
+    ld hl, sPass
+    ld de, RESULT_ADDR
+    call PrintString
+    ld hl, sRitualOk
+    ld de, HTTP_ADDR
+    call PrintString
+    jp WaitForBackButton
+
+.badChecksum
+    call SoundError
+    ld hl, sFail
+    ld de, RESULT_ADDR
+    call PrintString
+    ld hl, sRitualChecksumBad
+    ld de, ERROR_ADDR
+    call PrintString
+    jp WaitForBackButton
+
+.fail
+    push af
+    call SoundError
+    ld hl, sFail
+    ld de, RESULT_ADDR
+    call PrintString
+    call ShowRitualStep
+    pop af
+    call PrintErrorCode
+    jp WaitForBackButton
+
+; Begin Session -> End Session, nothing in between.
+; Output: A = result (0=OK)
+; Clobbers: everything
+RitualEmptySession:
+    call MagbBeginSession
+    or a, a
+    ret nz
+    jp MagbEndSession
+
+; Begin Session -> Read Config at the given split -> End Session.
+; Input:  A = first chunk length
+; Output: A = result (0=OK)
+; Clobbers: everything
+RitualConfigSession:
+    ld [wRitualSplit], a
+    call MagbBeginSession
+    or a, a
+    ret nz
+    ld a, [wRitualSplit]
+    call MagbReadConfigSplit
+    or a, a
+    jr z, .readOk
+    push af
+    call MagbEndSession
+    pop af
+    ret
+.readOk
+    jp MagbEndSession
+
+; Waits B VBlanks. Same halt/nop pattern MagbWakeAdapter uses; only
+; VBlank is unmasked, so each halt is one frame.
+; Clobbers: A, B
+RitualWait:
+    ld a, b
+    or a, a
+    ret z
+.loop
+    halt
+    nop
+    dec b
+    jr nz, .loop
+    ret
+
+; Waits MAGB_RITUAL_GAP_LONG_FRAMES VBlanks -- more than 255, so it
+; needs a 16-bit counter rather than RitualWait's single byte.
+; Clobbers: A, B, C
+RitualWaitLong:
+    ld bc, MAGB_RITUAL_GAP_LONG_FRAMES
+.loop
+    ld a, b
+    or a, c
+    ret z
+    halt
+    nop
+    dec bc
+    jr .loop
+
+sRitualStepPrefix: db "STEP "
+sRitualStepPrefixEnd:
+
+; Prints "STEP n" so a failure says which of the five sessions broke.
+; Clobbers: everything
+ShowRitualStep:
+    ld hl, wRitualMsg
+    ld de, sRitualStepPrefix
+    ld b, sRitualStepPrefixEnd - sRitualStepPrefix
+.copy
+    ld a, [de]
+    ld [hl+], a
+    inc de
+    dec b
+    jr nz, .copy
+    ld a, [wRitualStep]
+    add a, "0"
+    ld [hl+], a
+    xor a, a
+    ld [hl], a
+    ld hl, wRitualMsg
+    ld de, HTTP_ADDR
+    jp PrintString
+
+sSubSessionRitual:  db "SESSION RITUAL", 0
+sRitualRunning:     db "RITUAL: ~25S", 0
+sRitualOk:          db "5 SESSIONS OK", 0
+sRitualChecksumBad: db "CONFIG CHECKSUM BAD", 0
 
 ; ---- BIG BUFFER (streamed download + upload round-trip) -----------------
 ;
@@ -5048,6 +5250,9 @@ wTraceIdxRx: db
 wTraceRowAddr: dw   ; current tilemap row address
 
 SECTION "Menu State", WRAM0
+wRitualStep: db  ; which of the five ritual sessions is running
+wRitualSplit: db ; config-read split for the session in progress
+wRitualMsg: ds 8 ; "STEP n" + NUL
 ; Which transfer routine RunBufferTestCommon should call -- the only
 ; thing that differs between SMALL BUFFER and BIG BUFFER.
 wBufferTestFn: dw
