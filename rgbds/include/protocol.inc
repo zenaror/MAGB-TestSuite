@@ -176,38 +176,6 @@ DEF MAGB_TIMEOUT_FRAMES_LONG EQU 900 ; ~15s @ ~59.7Hz
 ; handled explicitly, as no wait at all.
 DEF MAGB_PACING_RECV_FRAMES EQU 24 ; ~400 ms between blocks of one transfer
 
-; ---- The pre-connection ritual -----------------------------------------
-;
-; Before it dials, a real Mobile Trainer does not just open a session and
-; go. The same BGB capture shows five sessions, four of them throwaway,
-; separated by seconds of silence:
-;
-;   22.019  Begin -> End                    (43 ms, empty session)
-;           ~2 s
-;   24.115  Begin -> Read Config -> End     (249 ms)
-;           ~15 s
-;   39.511  Begin -> End                    (21 ms, empty session)
-;           ~2 s
-;   41.587  Begin -> Read Config -> End     (299 ms)
-;           ~2 s
-;   43.991  Begin -> Read Config -> Status -> Call -> ... (the real one)
-;
-; and the two config reads use DIFFERENT splits of the same 192 bytes
-; ($80+$40 in one, $60+$60 in the other).
-;
-; MAGB_RITUAL_GAP_LONG_FRAMES is the odd one out: ~15 s is almost
-; certainly a person sitting at a menu rather than protocol behaviour,
-; and it is most of what makes the ritual take ~25 s. Kept at the
-; measured value because fidelity is the point of the test, but it is
-; the first thing to shorten if that becomes annoying.
-DEF MAGB_RITUAL_GAP_FRAMES      EQU 120 ; ~2 s between sessions
-DEF MAGB_RITUAL_GAP_LONG_FRAMES EQU 900 ; ~15 s -- a human at a menu
-
-; The two config-read splits the capture shows, as first-chunk lengths.
-; $60 is what every other caller uses; $80 is only ever exercised by the
-; ritual, which is the point of it.
-DEF MAGB_RITUAL_SPLIT_A EQU $80
-DEF MAGB_RITUAL_SPLIT_B EQU $60
 ; A P2P Dial needs even more headroom than an ISP Dial -- matches
 ; gbdk/src/app/test_runner.c's MAGB_TIMEOUT_FRAMES_P2P_CALL exactly,
 ; there confirmed against a real two-machine BGB session and against

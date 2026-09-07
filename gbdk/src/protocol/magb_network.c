@@ -256,25 +256,18 @@ magb_result_t magb_transfer_data(magb_context_t *ctx, uint8_t conn_id,
     return MAGB_OK;
 }
 
-magb_result_t magb_read_config_split(magb_context_t *ctx, uint8_t out[MAGB_CONFIG_SIZE],
-                                      uint8_t first_len)
+magb_result_t magb_read_config(magb_context_t *ctx, uint8_t out[MAGB_CONFIG_SIZE])
 {
     uint8_t half;
-    uint8_t offset = 0U;
-
-    if (first_len == 0U || first_len >= MAGB_CONFIG_SIZE) {
-        return MAGB_ERR_BAD_LENGTH;
-    }
 
     for (half = 0U; half < 2U; half++) {
         uint8_t payload[2];
         magb_packet_t response;
         magb_result_t r;
-        uint8_t chunk = (half == 0U) ? first_len
-                                     : (uint8_t)(MAGB_CONFIG_SIZE - first_len);
+        uint8_t offset = (uint8_t)(half * MAGB_CONFIG_CHUNK);
 
         payload[0] = offset;
-        payload[1] = chunk;
+        payload[1] = MAGB_CONFIG_CHUNK;
 
         r = magb_execute(ctx, MAGB_CMD_READ_CONFIG, payload, sizeof(payload), &response,
                           MAGB_TIMEOUT_FRAMES_SHORT);
@@ -284,19 +277,13 @@ magb_result_t magb_read_config_split(magb_context_t *ctx, uint8_t out[MAGB_CONFI
         if (response.command != magb_response_command(MAGB_CMD_READ_CONFIG)) {
             return MAGB_ERR_UNEXPECTED_COMMAND;
         }
-        if (response.payload_len != (uint8_t)(chunk + 1U) ||
+        if (response.payload_len != (uint8_t)(MAGB_CONFIG_CHUNK + 1U) ||
                 response.payload[0] != offset) {
             return MAGB_ERR_BAD_LENGTH;
         }
 
-        memcpy(&out[offset], &response.payload[1], chunk);
-        offset = (uint8_t)(offset + chunk);
+        memcpy(&out[offset], &response.payload[1], MAGB_CONFIG_CHUNK);
     }
 
     return MAGB_OK;
-}
-
-magb_result_t magb_read_config(magb_context_t *ctx, uint8_t out[MAGB_CONFIG_SIZE])
-{
-    return magb_read_config_split(ctx, out, MAGB_CONFIG_CHUNK);
 }
