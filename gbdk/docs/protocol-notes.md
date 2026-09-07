@@ -1183,12 +1183,22 @@ by anything in this TestSuite:
    ends by checksumming the assembled blob — a garbled reassembly shows
    up as a checksum failure rather than as five sessions that "worked".
 
-Both ROMs implement this as a **separate test** ("SESSION RITUAL"),
-not as a prologue on every ISP test. It is ~25 s of mostly waiting, and
-every other test would pay that on every run. It neither dials nor
-authenticates, so it needs no ISP password; the capture's fifth session
-goes on to connect, and that part is what every other ISP test already
-covers.
+**Every test runs it**, as a prologue, in both ROMs. It was briefly a
+separate menu entry instead; that was wrong. A real ROM never talks to
+the adapter without having gone through this first, so a TestSuite that
+reaches the wire by a route no real software takes is not testing what
+real software does — which is the same argument as the ~400 ms block
+pacing above, and it applies with more force here, because the ritual
+changes the *sequence* rather than only its speed.
+
+It costs ~25 s per test run, almost all of it the deliberate gaps. That
+cost is the reason to keep `TEST_RITUAL_GAP_LONG_FRAMES` in mind, not a
+reason to skip the ritual.
+
+The ritual stops after the fourth session. The capture's fifth is the
+one the ROM dials from, so it is the test's own Begin Session rather
+than the prologue's — the prologue leaves the adapter idle and hands
+over.
 
 The ~15 s gap is the one number here that is probably not protocol at
 all — almost certainly a person sitting at a menu. It is kept at the

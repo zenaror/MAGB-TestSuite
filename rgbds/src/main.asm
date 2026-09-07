@@ -353,6 +353,10 @@ RunAdapterSessionTest:
     ld de, $9800
     call PrintString
 
+    call SessionRitual
+    or a, a
+    jp nz, .fail
+
     ld a, STATUS_WAKE
     call SetStatus
     call MagbBeginSession
@@ -575,6 +579,10 @@ RunReadConfigTest:
     ld hl, sMenuReadConfig
     ld de, $9800
     call PrintString
+
+    call SessionRitual
+    or a, a
+    jp nz, .fail
 
     ld a, STATUS_WAKE
     call SetStatus
@@ -2227,6 +2235,10 @@ RunIspHttpCore:
     ld de, $9801
     call PrintString
 
+    call SessionRitual
+    or a, a
+    jp nz, .showFail
+
     ld a, CMD_SESSION
     call SetCommand
     ld a, STATUS_WAKE
@@ -2360,7 +2372,7 @@ RunIspHttpCore:
 ; is not just a rename: it keeps the doAuth(2) coverage NEWS ARTICLE was
 ; the only holder of, and adds the Authorization-reuse POST that nothing
 ; exercised before (see big_buffer.asm's SMALL BUFFER header).
-DEF ISP_SUBMENU_COUNT EQU 8
+DEF ISP_SUBMENU_COUNT EQU 7
 
 IspSubMenuItemAddrs: ; rows 2-8, column 0 (cursor); matches gotoxy(0, 2+i)
     dw $9840
@@ -2370,7 +2382,6 @@ IspSubMenuItemAddrs: ; rows 2-8, column 0 (cursor); matches gotoxy(0, 2+i)
     dw $98C0
     dw $98E0
     dw $9900
-    dw $9920
 
 ; Exact wording/order matches gbdk's kIspLabels[] in src/main.c.
 IspSubMenuLabels:
@@ -2381,7 +2392,6 @@ IspSubMenuLabels:
     dw sSubEmailSend
     dw sSubEmailRecv
     dw sSubRawTcp
-    dw sSubSessionRitual
 
 IspSubMenuHandlers:
     dw RunTamagoEggTest
@@ -2391,7 +2401,6 @@ IspSubMenuHandlers:
     dw RunEmailSendTest
     dw RunEmailRecvTest
     dw RunRawTcpTest
-    dw RunSessionRitualTest
 
 sSubTamagoEgg:   db "TAMAGO EGG", 0
 sSubSmallBuffer: db "SMALL BUFFER", 0
@@ -2426,11 +2435,16 @@ sSetIspPassword: db "SET ISP PASSWORD", 0
 ; session sequencing. Needs no ISP password -- nothing here
 ; authenticates or dials.
 ; Clobbers: everything
-RunSessionRitualTest:
-    call ClearTextScreen
-    ld hl, sSubSessionRitual
-    ld de, $9801
-    call PrintString
+; Runs the ritual. Returns A=0 on success; on failure A holds the
+; MAGB_ERR_* and wRitualMsg holds "STEP n" for the caller to print.
+;
+; EVERY test calls this before its own work, which is the point: a real
+; ROM never talks to the adapter without having gone through it first,
+; so a TestSuite that skips it is not testing what real software does.
+; It costs ~25 s per run, almost all of it the deliberate gaps;
+; MAGB_RITUAL_GAP_LONG_FRAMES is where most of that sits.
+; Clobbers: everything
+SessionRitual::
     ld hl, sRitualRunning
     ld de, HTTP_ADDR
     call PrintString
@@ -2470,53 +2484,38 @@ RunSessionRitualTest:
     call RitualConfigSession
     or a, a
     jr nz, .fail
-    ld b, MAGB_RITUAL_GAP_FRAMES
-    call RitualWait
 
-    ld a, 5
-    ld [wRitualStep], a
-    ld a, MAGB_RITUAL_SPLIT_B
-    call RitualConfigSession
-    or a, a
-    jr nz, .fail
-
-    ; If the varying splits produced a garbled 192 bytes, this is where
-    ; it shows -- a far more useful failure than "the sessions all
-    ; completed".
-    ld hl, wConfigData
-    call MagbConfigChecksumOk
+    ; Checksum the config the varying splits produced. A garbled
+    ; reassembly shows here rather than as four sessions that "worked".
+    call MagbConfigChecksumOk ; reads wConfigData directly, no input
     or a, a
     jr z, .badChecksum
 
-    call SoundSuccess
-    ld hl, sPass
-    ld de, RESULT_ADDR
-    call PrintString
-    ld hl, sRitualOk
+    ; The capture's fifth session is the one the ROM dials from, so it
+    ; is the caller's own Begin Session, not ours. Leave the adapter
+    ; idle here and let the test open it.
+    ld b, MAGB_RITUAL_GAP_FRAMES
+    call RitualWait
+    ; Clear the "running" line so the test's own output starts clean.
+    ld hl, sRitualBlank
     ld de, HTTP_ADDR
     call PrintString
-    jp WaitForBackButton
+    xor a, a
+    ret
 
 .badChecksum
-    call SoundError
-    ld hl, sFail
-    ld de, RESULT_ADDR
-    call PrintString
+    call ShowRitualStep
     ld hl, sRitualChecksumBad
     ld de, ERROR_ADDR
     call PrintString
-    jp WaitForBackButton
+    ld a, MAGB_ERR_ISP
+    ret
 
 .fail
     push af
-    call SoundError
-    ld hl, sFail
-    ld de, RESULT_ADDR
-    call PrintString
     call ShowRitualStep
     pop af
-    call PrintErrorCode
-    jp WaitForBackButton
+    ret
 
 ; Begin Session -> End Session, nothing in between.
 ; Output: A = result (0=OK)
@@ -2599,10 +2598,11 @@ ShowRitualStep:
     ld de, HTTP_ADDR
     jp PrintString
 
-sSubSessionRitual:  db "SESSION RITUAL", 0
-sRitualRunning:     db "RITUAL: ~25S", 0
-sRitualOk:          db "5 SESSIONS OK", 0
-sRitualChecksumBad: db "CONFIG CHECKSUM BAD", 0
+sRitualRunning:     db "RITUAL...", 0
+; Same width as sRitualRunning, to blank that line before the test's own
+; output lands on it.
+sRitualBlank:       db "         ", 0
+sRitualChecksumBad: db "RITUAL CFG CKSUM BAD", 0
 
 ; ---- BIG BUFFER (streamed download + upload round-trip) -----------------
 ;
@@ -2637,6 +2637,10 @@ RunBufferTestCommon:
     pop hl
     ld de, $9801
     call PrintString
+
+    call SessionRitual
+    or a, a
+    jp nz, .showFail
 
     ld a, [wIspPassword]
     or a, a
@@ -3026,6 +3030,10 @@ RunEmailSendTest:
     ld hl, sSubEmailSend
     ld de, $9801
     call PrintString
+
+    call SessionRitual
+    or a, a
+    jp nz, .showFail
 
     ld a, CMD_SESSION
     call SetCommand
@@ -3618,6 +3626,10 @@ RunEmailRecvTest:
     ld a, [wIspPassword]
     or a, a
     jp z, .noPassword
+
+    call SessionRitual
+    or a, a
+    jp nz, .showFail
 
     ld a, CMD_SESSION
     call SetCommand
@@ -4226,6 +4238,10 @@ RunRawTcpTest:
     ld hl, sRawTcpTitle
     ld de, $9800
     call PrintString
+
+    call SessionRitual
+    or a, a
+    jp nz, .showFail
 
     call MagbBeginSession
     or a, a
