@@ -82,7 +82,7 @@ not implemented.
     / "NINTENDO ECHO OK" on success.
   - **ISP/HTTP** (`RunIspHttpMenu`/`ShowIspSubMenu`, Test 2): opens the
     same 7-item submenu gbdk's `ui_select_submenu()`/`kIspLabels[]` does
-    (same wording/order: Tamago Egg, News Article, Big Buffer, Trainer
+    (same wording/order: Tamago Egg, Small Buffer, Big Buffer, Trainer
     Home, Email Send, Email Recv, Raw TCP(NC)) -- title row 0, items
     starting row 2, "A:RUN B:BACK" footer, selection resets to item 0
     every time it's entered (unlike the main menu's persisted
@@ -1442,3 +1442,56 @@ Cost: ~2.5 KiB in `ROMX` bank 1 (10096 still free), ~305 bytes in `ROM0`
 
 Not runtime-verified. Needs a real REON MAGBTEST fixture serving both
 paths; see "Manual tests requested" in the session that added it.
+
+## SMALL BUFFER, and the removal of NEWS ARTICLE
+
+NEWS ARTICLE is gone. It fetched Pokémon Crystal's real news endpoints
+(`/01/CGB-BXTJ/news/config.php` and `100.news.php`) to prove the GB00
+handshake; the project owner asked for synthetic data instead. SMALL
+BUFFER replaces it, and is deliberately more than a rename.
+
+The pair now covers opposite ends of two axes at once:
+
+| | SMALL | BIG |
+|---|---|---|
+| size | 128 B, one Transfer Data response | 8192 B, streamed in ~33 |
+| regime | no streaming, no chunking | running checksum, chunked upload |
+| download auth | `doAuth(2)` (utility) | `doAuth(1)` |
+| upload | POST to the **same URL**, reusing the GET's `Authorization` | POST to `/cgb/upload`, `doAuth()` type 0 |
+| session token | none | `Gb-Auth-ID`, in a third request |
+
+The Authorization reuse is why SMALL exists rather than being BIG with a
+smaller constant. `auth.php` caches `utility_authed_user_id` for 15
+minutes precisely so the official client can POST after authenticating
+once (`news.php`: *"Ranking queries are POSTed without replaying a GB00
+auth challenge"*). That cache is the only server-side state on the path,
+and it would have gone uncovered when NEWS ARTICLE left.
+
+Notes:
+
+- **The server side had to be built for this.** `doAuth(2)` is not
+  something a client can select: `download.php`/`ranking.php` call
+  `doAuth(1)`, `upload.php` calls type 0, and type 2 is reached only by
+  `utility.php` or by a script that authenticates itself the way
+  `news.php` does, with `download.php`'s `$skipCostAuth` letting it
+  through. The REON maintainer added a self-authenticating fixture plus
+  a `$skipCostAuth` entry anchored to the exact path.
+- **`X-Test-User` is checked.** The fixture reports the user its utility
+  auth resolved. A correct body with user `0` fails as
+  `NOT AUTHENTICATED` — otherwise an endpoint that stopped enforcing
+  auth would still pass, which is the one thing this test must not do.
+- **A 401 on the POST has its own message**, `AUTH REUSE REJECTED`,
+  distinct from a checksum disagreement: it means the window did not
+  hold, which is a different fault entirely.
+- **Body size is verified exactly**, not just the checksum. A short read
+  that happened to sum correctly would otherwise pass silently.
+- Removing NEWS ARTICLE also made `Gb00FetchOne`/`Gb00HttpGetOnce` dead
+  (nothing else used them); both are gone, along with their scratch.
+  `Gb00StatusCode`, `Gb00FindChallenge` and `Gb00BuildAuthorization`
+  stay — the streaming engine uses them.
+
+Net effect on space, after adding a test: ROM0 3981 free (was 3039),
+ROMX 9101 free (was 9730 before SMALL BUFFER, 6288 used at its peak),
+WRAM0 390 free (was 123).
+
+Not runtime-verified yet.
