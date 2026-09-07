@@ -1543,23 +1543,17 @@ half of the same answer.)
 Not runtime-verified.
 
 
-## The session ritual runs before every test that connects
+## No session ritual (and why there was one)
 
-See `gbdk/docs/protocol-notes.md`, "The pre-connection ritual", for the
-capture it comes from. On this side it is `SessionRitual` in
-`src/main.asm`, called from all seven tests right after each draws its
-title and before its own `MagbBeginSession`.
+The Mobile Trainer capture that gave the pacing numbers also shows five
+sessions before the connection, four throwaway, with the config read at
+varying splits. That got implemented here as a prologue, and it was
+wrong twice over: it turned a timing reference into a behavioural
+feature, and it broke the primitives — a handshake test that performs
+four prior handshakes is no longer a handshake test.
 
-It applies to the five tests that connect, and deliberately not to
-`RunAdapterSessionTest` or `RunReadConfigTest`. Those two exist to
-exercise one primitive in isolation, and a handshake test that needs
-four prior handshakes before it starts is no longer a handshake test —
-it fails inside the prologue and stops telling you what broke. P2P is
-excluded as well: the capture is of an ISP connection, and there is
-none of a real ROM placing a P2P call.
+Removed. The sequence is recorded as an observation in
+`gbdk/docs/protocol-notes.md`; what the capture was actually for is the
+receive pacing, which stays. `MagbReadConfig` is back to the fixed
+`0x60+0x60` split it always used.
 
-On failure the ritual prints `STEP n` at `HTTP_ADDR` and returns the
-`MAGB_ERR_*`, which each caller feeds to its existing failure handler —
-no test needed a new one. `RunRawTcpTest` was the only awkward case on
-the GBDK side (it has no `test_result_t`); here every test already
-reports through the same screen helpers, so it was uniform.
