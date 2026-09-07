@@ -13,20 +13,17 @@
 ;   ISP/HTTP -- opens a 7-item submenu (RunIspHttpMenu/ShowIspSubMenu,
 ;     below), matching gbdk's ui_select_submenu()/kIspLabels[] (same
 ;     wording, same order: Tamago Egg, News Config, News Article,
-;     Trainer Home, Email Send, Email Recv, Raw TCP). Tamago Egg and
-;     Trainer Home are backed by a real implementation
-;     (RunIspHttpCore's full Begin Session -> Read Identity -> Dial ->
+;     Trainer Home, Email Send, Email Recv, Raw TCP). All seven are
+;     backed by real implementations: Tamago Egg and Trainer Home share
+;     RunIspHttpCore's full Begin Session -> Read Identity -> Dial ->
 ;     ISP Login -> DNS -> TCP Open -> HTTP GET -> TCP Close -> ISP
-;     Logout -> Hang Up -> End Session sequence); the other five show an
-;     honest "NOT IMPLEMENTED" -- see docs/status.md for that gap.
-; READ CONFIG, ISP PASSWORD, P2P CALLER, P2P LISTENER, and SELECT's
-; trace viewer have no protocol/UI implementation behind them yet on
-; this side (no Read Configuration wrapper, no P2P dial/answer, no
-; trace ring buffer) -- selecting any of them shows an honest
-; "NOT IMPLEMENTED" instead of a fake result (repo-root CLAUDE.md's "No
-; Fake Implementations"), rather than being left off the menu; the menu
-; shell itself is what needed to match gbdk here, not every item behind
-; it yet.
+;     Logout -> Hang Up -> End Session sequence, and the buffer tests
+;     add GB00 authentication on top of it.
+; Every menu item is backed by a real implementation now; nothing here
+; shows a stub. (There used to be an honest "NOT IMPLEMENTED" screen for
+; the items that had none, rather than a fake result -- repo-root
+; CLAUDE.md's "No Fake Implementations". It and its string are gone,
+; since the last item behind it got implemented.)
 ;
 ; RunIspHttpTest's own screen layout (fixed positions, no
 ; scrolling/wrapping) is unchanged from the previous milestone:
@@ -247,8 +244,8 @@ DrawMenu:
     jp PrintString
 
 ; Blocks until B is newly pressed, then returns -- used after a test's
-; result (or "NOT IMPLEMENTED") screen so it stays up until the user is
-; done reading it, matching gbdk's ui_prompt_continue()/wait_key_edge()
+; result screen so it stays up until the user is done reading it,
+; matching gbdk's ui_prompt_continue()/wait_key_edge()
 ; (only the B half of that -- nothing here needs A to confirm).
 ; Clobbers: A
 WaitForBackButton:
@@ -4311,9 +4308,8 @@ MenuItemAddrs: ; rows 4-9, column 0 (cursor); matches gbdk's gotoxy(0, 4+i)
     dw $9920
 
 ; Exact wording/order matches gbdk/src/app/ui.c's kMenuLabels[] -- the
-; outer menu shell is meant to look identical between the two
-; implementations, even though several of these still just show
-; "NOT IMPLEMENTED" on this side (see docs/status.md).
+; two implementations are meant to be indistinguishable from the screen,
+; down to the failure-message wording (see docs/status.md).
 MenuLabels:
     dw sMenuAdapterSession
     dw sMenuReadConfig

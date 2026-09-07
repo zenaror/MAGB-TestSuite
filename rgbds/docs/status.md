@@ -605,15 +605,16 @@ RAW TCP(NC)) -- now exists and is what the main menu's "ISP/HTTP" item
 opens, replacing the earlier milestone's "runs Tamago Egg directly"
 behavior. Title row 0, items starting row 2, `"A:RUN B:BACK"` footer,
 selection resets to item 0 every entry (a plain WRAM byte, not
-persisted like the main menu's), B returns to the main menu. All 6
-entries are backed by a real implementation (Tamago Egg, Trainer
-Home, News Article, Email Send, Email Recv, Raw TCP) -- none of this
-submenu's entries show "NOT IMPLEMENTED". (A 7th entry, News Config,
-used to exist as a standalone diagnostic -- removed as redundant once
-News Article already exercises that same fetch on its way to the
-article.) Verified via PyBoy: all 6 labels render correctly,
-up/down/A/B navigation works, B returns to the main menu, and each
-entry reaches its own real test flow.
+persisted like the main menu's), B returns to the main menu. All 7
+entries are backed by a real implementation (Tamago Egg, Small Buffer,
+Big Buffer, Trainer Home, Email Send, Email Recv, Raw TCP) -- nothing
+in this ROM shows "NOT IMPLEMENTED" any more; that screen and its
+string are gone. (Two entries that used to be here are not: News Config,
+removed as redundant with News Article, and News Article itself,
+replaced by Small Buffer so no test depends on Pokemon Crystal's live
+data.) Verified via PyBoy at the time it was a 6-entry menu: labels
+render correctly, up/down/A/B navigation works, B returns to the main
+menu, and each entry reaches its own real test flow.
 
 ### UI feedback: sound and a build indicator
 
