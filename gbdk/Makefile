@@ -43,6 +43,7 @@ SRCS := \
     src/protocol/magb_session.c \
     src/protocol/magb_network.c \
     src/protocol/magb_config.c \
+    src/protocol/magb_fmt.c \
     src/app/test_runner.c \
     src/app/ui.c \
     src/app/gb00_auth.c \
@@ -161,13 +162,19 @@ $(ROM): $(SRCS) $(wildcard $(INCLUDE_DIR)/*.h) | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-test: $(BUILD_DIR)/test_packet $(BUILD_DIR)/test_config
+test: $(BUILD_DIR)/test_packet $(BUILD_DIR)/test_config $(BUILD_DIR)/test_fmt
 	$(BUILD_DIR)/test_packet
 	$(BUILD_DIR)/test_config
+	$(BUILD_DIR)/test_fmt
 
 $(BUILD_DIR)/test_packet: tests/host/test_packet.c src/protocol/magb_packet.c | $(BUILD_DIR)
 	$(CC) -Wall -Wextra -I$(INCLUDE_DIR) -DMAGB_HOST_TEST \
 	    tests/host/test_packet.c src/protocol/magb_packet.c \
+	    -o $@
+
+$(BUILD_DIR)/test_fmt: tests/host/test_fmt.c src/protocol/magb_fmt.c | $(BUILD_DIR)
+	$(CC) -Wall -Wextra -I$(INCLUDE_DIR) -DMAGB_HOST_TEST \
+	    tests/host/test_fmt.c src/protocol/magb_fmt.c \
 	    -o $@
 
 $(BUILD_DIR)/test_config: tests/host/test_config.c src/protocol/magb_config.c | $(BUILD_DIR)
