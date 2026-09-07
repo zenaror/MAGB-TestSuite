@@ -388,25 +388,6 @@ RunAdapterSessionTest:
     call PrintErrorCode
     jp WaitForBackButton
 
-; Generic "not implemented" screen for menu items with no real protocol/
-; UI implementation behind them yet on this side (see docs/status.md) --
-; shows the real title so it's clear the button worked, then an honest
-; "NOT IMPLEMENTED" rather than a fake PASS (repo-root CLAUDE.md's
-; "No Fake Implementations").
-;
-; Input: HL = title string pointer
-; Clobbers: everything
-ShowNotImplemented:
-    push hl
-    call ClearTextScreen
-    pop hl
-    ld de, $9800
-    call PrintString
-    ld hl, sNotImplemented
-    ld de, RESULT_ADDR
-    call PrintString
-    jp WaitForBackButton
-
 ; ---- Protocol trace (SELECT) -----------------------------------------
 ;
 ; Shows the most recent TRACE_SHOWN_PAIRS TX/RX byte pairs recorded by
@@ -2196,9 +2177,9 @@ RunTamagoEggTest:
     ld [wHttpRequestPtr + 1], a
     ld a, sHttpRequestEnd - sHttpRequest
     ld [wHttpRequestLen], a
-    ld a, low(sTitle)
+    ld a, low(sSubTamagoEgg)
     ld [wHttpTestTitle], a
-    ld a, high(sTitle)
+    ld a, high(sSubTamagoEgg)
     ld [wHttpTestTitle + 1], a
     jp RunIspHttpCore
 
@@ -4380,7 +4361,6 @@ sMenuIspHttp:        db "ISP/HTTP", 0
 sMenuP2pCaller:      db "P2P CALLER", 0
 sMenuP2pListener:    db "P2P LISTENER", 0
 
-sNotImplemented: db "NOT IMPLEMENTED", 0
 sAdapterIdLabel: db "ADAPTER ID: ", 0
 sConfigChecksumOk:  db "CHECKSUM:OK", 0
 sConfigChecksumBad: db "CHECKSUM:BAD", 0
@@ -4597,7 +4577,7 @@ sHttpRequestTrainerHomeEnd:
 
 sHttpMagic: db "HTTP/" ; compared by fixed 5-byte count, no null needed
 sHttpShort: db "HTTP/ (SHORT)", 0
-sHttpNoPrefix: db "NO HTTP PREFIX", 0
+sHttpNoPrefix: db "NO HTTP/ PREFIX", 0
 
 DEF HTTP_RESP_BUF_SIZE   EQU 240  ; gbdk/src/app/test_runner.c's HTTP_RESP_BUF_SIZE
 DEF HTTP_MAX_TOTAL_BYTES EQU 8192 ; gbdk's HTTP_MAX_TOTAL_BYTES
@@ -4865,7 +4845,6 @@ sStatusRead: db "READ", 0
 
 ; ---- Result / error text --------------------------------------------------
 
-sTitle: db "MAGB TEST 2", 0
 sTrainerHomeTitle: db "TRAINER HOME", 0
 sPass:  db "RESULT: PASS", 0
 sFail:  db "RESULT: FAIL", 0

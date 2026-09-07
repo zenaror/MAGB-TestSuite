@@ -207,7 +207,10 @@ void ui_show_result(const char *title, const test_result_t *result)
 
     cls();
     printf("%s\n\n", title);
-    printf("RESULT:%s\n\n", result->passed ? "PASS" : "FAIL");
+    /* Spaced to match the RGBDS ROM's "RESULT: PASS" -- the two had
+     * disagreed, and a screenshot should not tell you which build it
+     * came from. */
+    printf("RESULT: %s\n\n", result->passed ? "PASS" : "FAIL");
     if (result->detail[0][0] != '\0') {
         printf("%s\n", result->detail[0]);
     }
