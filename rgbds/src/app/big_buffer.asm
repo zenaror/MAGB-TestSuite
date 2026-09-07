@@ -57,6 +57,11 @@ DEF BB_REQ_BUF_SIZE EQU 288
 DEF BB_BODY_START_NONE EQU $FFFF
 DEF BB_AUTH_ID_MAX EQU 48
 
+; The small half of the pair. Fits one Transfer Data payload, which is
+; the regime BIG BUFFER never reaches. Expected checksum is
+; 127*128/2 = 8128 = $1FC0.
+DEF BB_SMALL_SIZE EQU 128
+
 ; ---- Buffers ----------------------------------------------------------
 ;
 ; WRAM0 is down to ~123 free bytes, so everything here goes in WRAM bank
@@ -404,8 +409,35 @@ BbFindChecksumHeader:
     ld [wBbChecksumPresent], a
     ret
 
-sBbAuthIdHdr: db "Gb-Auth-ID:", 0
-DEF BB_AUTH_ID_HDR_LEN EQU 11
+sBbAuthIdHdr:  db "Gb-Auth-ID:"
+sBbAuthIdHdrEnd:
+sBbTestUserHdr: db "X-Test-User:"
+sBbTestUserHdrEnd:
+
+; Caller-set inputs for BbFindHeaderToken (WRAM rather than registers:
+; SM83 runs out of pairs fast, and the rest of this file already passes
+; descriptors this way).
+SECTION "Big Buffer Token Scratch", WRAMX, BANK[1]
+wBbTokenNeedlePtr: dw
+wBbTokenNeedleLen: db
+wBbTokenDestPtr:   dw
+
+SECTION "Big Buffer Token Code", ROMX, BANK[1]
+
+; Convenience wrappers, so call sites read as intent rather than as
+; four stores.
+; Clobbers: everything
+BbFindAuthId:
+    ld hl, sBbAuthIdHdr
+    ld b, sBbAuthIdHdrEnd - sBbAuthIdHdr
+    ld de, wBbAuthId
+    jr BbFindHeaderToken
+
+BbFindTestUser:
+    ld hl, sBbTestUserHdr
+    ld b, sBbTestUserHdrEnd - sBbTestUserHdr
+    ld de, wBbAuthId
+    ; fall through
 
 ; Copies the value of the "Gb-Auth-ID:" header out of the first
 ; [wBbHeadLen] bytes of wGb00RespBuf into wBbAuthId, NUL-terminated:
@@ -415,15 +447,35 @@ DEF BB_AUTH_ID_HDR_LEN EQU 11
 ;         than BB_AUTH_ID_MAX (refused rather than truncated -- a
 ;         half-copied session id would fail in a far more confusing way)
 ; Clobbers: everything
-BbFindAuthId:
+BbFindHeaderToken:
+    ld a, l
+    ld [wBbTokenNeedlePtr], a
+    ld a, h
+    ld [wBbTokenNeedlePtr + 1], a
+    ld a, b
+    ld [wBbTokenNeedleLen], a
+    ld a, e
+    ld [wBbTokenDestPtr], a
+    ld a, d
+    ld [wBbTokenDestPtr + 1], a
+
+    ; Empty destination up front: every failure path below returns with
+    ; the caller seeing an empty string, never a partial one.
+    ld h, d
+    ld l, e
     xor a, a
-    ld [wBbAuthId], a
+    ld [hl], a
 
     ld a, [wBbHeadLen + 1]
     or a, a
     jr nz, .sizeOk
     ld a, [wBbHeadLen]
-    cp a, BB_AUTH_ID_HDR_LEN + 1
+    ld hl, wBbTokenNeedleLen
+    inc a
+    cp a, [hl]
+    jr c, .tooShort
+    jr .sizeOk
+.tooShort
     ret c
 .sizeOk
     ld a, [wBbHeadLen]
@@ -431,7 +483,11 @@ BbFindAuthId:
     ld a, [wBbHeadLen + 1]
     ld b, a
     ld a, c
-    sub a, BB_AUTH_ID_HDR_LEN
+    push af
+    ld a, [wBbTokenNeedleLen]
+    ld l, a
+    pop af
+    sub a, l
     ld c, a
     ld a, b
     sbc a, 0
@@ -443,8 +499,12 @@ BbFindAuthId:
     push de
     ld hl, wGb00RespBuf
     add hl, de
-    ld de, sBbAuthIdHdr
-    ld b, BB_AUTH_ID_HDR_LEN
+    ld a, [wBbTokenNeedlePtr]
+    ld e, a
+    ld a, [wBbTokenNeedlePtr + 1]
+    ld d, a
+    ld a, [wBbTokenNeedleLen]
+    ld b, a
 .cmp
     ld a, [de]
     cp a, [hl]
@@ -502,7 +562,10 @@ BbFindAuthId:
     jr .skipSpaces
 
 .copyLoop
-    ld bc, wBbAuthId
+    ld a, [wBbTokenDestPtr]
+    ld c, a
+    ld a, [wBbTokenDestPtr + 1]
+    ld b, a
 .copyNext
     ld a, d
     or a, e
@@ -514,7 +577,16 @@ BbFindAuthId:
     jr z, .done
     ; refuse an over-long value rather than truncating it
     push hl
-    ld hl, wBbAuthId + BB_AUTH_ID_MAX
+    ld a, [wBbTokenDestPtr]
+    ld l, a
+    ld a, [wBbTokenDestPtr + 1]
+    ld h, a
+    ld a, l
+    add a, BB_AUTH_ID_MAX
+    ld l, a
+    ld a, h
+    adc a, 0
+    ld h, a
     ld a, c
     cp a, l
     ld a, b
@@ -537,7 +609,11 @@ BbFindAuthId:
     ld l, c
     xor a, a
     ld [hl], a
-    ld a, [wBbAuthId]
+    ld a, [wBbTokenDestPtr]
+    ld l, a
+    ld a, [wBbTokenDestPtr + 1]
+    ld h, a
+    ld a, [hl]
     or a, a
     ret z ; empty value
     ld a, 1
@@ -545,8 +621,12 @@ BbFindAuthId:
 
 .empty
 .tooLong
+    ld a, [wBbTokenDestPtr]
+    ld l, a
+    ld a, [wBbTokenDestPtr + 1]
+    ld h, a
     xor a, a
-    ld [wBbAuthId], a
+    ld [hl], a
     ret
 
 SECTION "Big Buffer Hex Scratch", WRAMX, BANK[1]
@@ -1825,3 +1905,368 @@ BbAppendDecimal16:
 SECTION "Big Buffer Decimal Scratch", WRAMX, BANK[1]
 wBbDecDigit:   db
 wBbDecStarted: db
+
+; ---- SMALL BUFFER ------------------------------------------------------
+;
+; The small half of the synthetic pair. Same body contract and same
+; checksum format as BIG BUFFER, but the opposite regime on both axes
+; that matter:
+;
+;   size  BB_SMALL_SIZE fits in ONE Transfer Data response, so nothing
+;         streams and nothing is chunked -- headers and body arrive
+;         together, which BIG BUFFER never exercises.
+;   auth  Both legs go through REON's doAuth(2) ("utility" auth) on the
+;         SAME URL. The POST goes to the download path, NOT /cgb/upload,
+;         and REUSES the Authorization from the GET with no second
+;         challenge.
+;
+; That reuse is the reason this exists rather than being BIG BUFFER with
+; a smaller number. auth.php caches utility_authed_user_id for 15
+; minutes precisely so the official client can POST after authenticating
+; once (news.php's own comment: "Ranking queries are POSTed without
+; replaying a GB00 auth challenge"). It is the only piece of
+; server-side state on that path, and it would have left with the
+; NEWS ARTICLE test this replaced.
+;
+; Contrast with BIG BUFFER's type-0 upload, which trades the
+; Authorization for a Gb-Auth-ID and needs a third request carrying it.
+; Nothing here ever sends a Gb-Auth-ID; if one ever appears on this
+; path, something is routed wrong.
+
+SECTION "Small Buffer Requests", ROMX, BANK[1]
+
+sBbSmallNoAuthReq:
+    db "GET /cgb/download?name=/01/MAGBTEST/0.smallbuffer.cgb HTTP/1.0", $0D, $0A
+    db "Host: gameboy.datacenter.ne.jp", $0D, $0A
+    db $0D, $0A
+sBbSmallNoAuthReqEnd:
+
+sBbSmallAuthPrefix:
+    db "GET /cgb/download?name=/01/MAGBTEST/0.smallbuffer.cgb HTTP/1.0", $0D, $0A
+    db "Host: gameboy.datacenter.ne.jp", $0D, $0A
+    db "Authorization: GB00 name=", $22
+sBbSmallAuthPrefixEnd:
+
+; Note the POST target: the DOWNLOAD path, deliberately.
+sBbSmallPostPrefix:
+    db "POST /cgb/download?name=/01/MAGBTEST/0.smallbuffer.cgb HTTP/1.0", $0D, $0A
+    db "Host: gameboy.datacenter.ne.jp", $0D, $0A
+    db "Authorization: GB00 name=", $22
+sBbSmallPostPrefixEnd:
+
+sBbSmallPostMid:
+    db $22, $0D, $0A
+    db "Content-Length: 128", $0D, $0A
+    db "X-Test-Checksum: "
+sBbSmallPostMidEnd:
+
+ASSERT BB_SMALL_SIZE == 128, "sBbSmallPostMid's Content-Length is hardcoded to 128"
+
+DEF BB_SMALL_GET_LEN EQU (sBbSmallAuthPrefixEnd - sBbSmallAuthPrefix) + GB00_AUTHORIZATION_LEN + \
+                         (sBbAuthSuffixEnd - sBbAuthSuffix)
+ASSERT BB_SMALL_GET_LEN <= BB_REQ_BUF_SIZE, "wBbReqBuf too small for the small GET"
+
+DEF BB_SMALL_POST_LEN EQU (sBbSmallPostPrefixEnd - sBbSmallPostPrefix) + GB00_AUTHORIZATION_LEN + \
+                          (sBbSmallPostMidEnd - sBbSmallPostMid) + 4 + \
+                          (sBbUpAuthTailEnd - sBbUpAuthTail)
+ASSERT BB_SMALL_POST_LEN <= BB_REQ_BUF_SIZE, "wBbReqBuf too small for the small POST"
+
+SECTION "Small Buffer Code", ROMX, BANK[1]
+
+; Builds the authenticated GET into wBbReqBuf.
+; Clobbers: everything
+BbBuildSmallAuthReq:
+    ld hl, wBbReqBuf
+    ld de, sBbSmallAuthPrefix
+    ld b, sBbSmallAuthPrefixEnd - sBbSmallAuthPrefix
+    call BbAppend
+    ld de, wGb00Authorization
+    ld b, GB00_AUTHORIZATION_LEN
+    call BbAppend
+    ld de, sBbAuthSuffix
+    ld b, sBbAuthSuffixEnd - sBbAuthSuffix
+    call BbAppend
+    ld a, BB_SMALL_GET_LEN & $FF
+    ld [wBbReqLen], a
+    ld a, BB_SMALL_GET_LEN >> 8
+    ld [wBbReqLen + 1], a
+    ret
+
+; Builds the POST into wBbReqBuf, reusing the SAME Authorization value
+; the GET was accepted with -- no new challenge is fetched.
+; Clobbers: everything
+BbBuildSmallPostReq:
+    ld hl, wBbReqBuf
+    ld de, sBbSmallPostPrefix
+    ld b, sBbSmallPostPrefixEnd - sBbSmallPostPrefix
+    call BbAppend
+    ld de, wGb00Authorization
+    ld b, GB00_AUTHORIZATION_LEN
+    call BbAppend
+    ld de, sBbSmallPostMid
+    ld b, sBbSmallPostMidEnd - sBbSmallPostMid
+    call BbAppend
+
+    ld a, [wBbDlChecksum]
+    ld c, a
+    ld a, [wBbDlChecksum + 1]
+    ld b, a
+    call BbAppendHex16
+
+    ld de, sBbUpAuthTail
+    ld b, sBbUpAuthTailEnd - sBbUpAuthTail
+    call BbAppend
+
+    ld a, BB_SMALL_POST_LEN & $FF
+    ld [wBbReqLen], a
+    ld a, BB_SMALL_POST_LEN >> 8
+    ld [wBbReqLen + 1], a
+    ret
+
+; Same contract as BbRunTransfer: everything between DNS Query and ISP
+; Logout. Requires wDnsResultIp, wIdentityLogin and wIspPassword set.
+; Output: A = result (0=OK); wBbFailMsgPtr set on failure, and
+;         wBbDetail0/wBbDetail1 hold the two summary lines.
+; Clobbers: everything
+BbRunSmallTransfer::
+    call BbClearDetails
+
+    ld hl, wDnsResultIp
+    ld bc, 80
+    call MagbTcpOpen
+    or a, a
+    jp nz, .tcpOpenFail
+
+    ld de, sBbSmallNoAuthReq
+    ld bc, sBbSmallNoAuthReqEnd - sBbSmallNoAuthReq
+    call BbLoadStaticReq
+    call BbSendBuiltRequest
+    or a, a
+    jp nz, .closeAndReturn
+
+    ; This endpoint MUST challenge us. Being served without one would
+    ; mean doAuth(2) is not being enforced, and the whole point of this
+    ; test -- that the reuse below is a real reuse -- would be void.
+    call BbStatusIs401
+    jp nz, .noChallenge
+
+    call BbChallengeAuth
+    or a, a
+    jp nz, .haveAuth
+    call MagbTcpClose
+    ld a, MAGB_ERR_ISP
+    ret
+
+.haveAuth
+    call MagbTcpClose
+    ld hl, wDnsResultIp
+    ld bc, 80
+    call MagbTcpOpen
+    or a, a
+    jp nz, .reopenFail
+
+    call BbBuildSmallAuthReq
+    call BbSendBuiltRequest
+    or a, a
+    jp nz, .closeAndReturn
+    call MagbTcpClose
+
+    ; Checksum must be present and must agree.
+    ld a, [wBbChecksumPresent]
+    or a, a
+    jp z, .checksumBad
+    ld a, [wBbChecksum]
+    ld hl, wBbExpected
+    cp a, [hl]
+    jp nz, .checksumBad
+    ld a, [wBbChecksum + 1]
+    ld hl, wBbExpected + 1
+    cp a, [hl]
+    jp nz, .checksumBad
+
+    ; Size is part of the contract, not incidental: a short read that
+    ; happened to checksum correctly would otherwise pass silently.
+    ld a, [wBbBodyLen]
+    cp a, BB_SMALL_SIZE & $FF
+    jp nz, .shortBody
+    ld a, [wBbBodyLen + 1]
+    cp a, BB_SMALL_SIZE >> 8
+    jp nz, .shortBody
+
+    ld a, [wBbChecksum]
+    ld [wBbDlChecksum], a
+    ld a, [wBbChecksum + 1]
+    ld [wBbDlChecksum + 1], a
+    ld a, [wBbBodyLen]
+    ld [wBbDlBodyLen], a
+    ld a, [wBbBodyLen + 1]
+    ld [wBbDlBodyLen + 1], a
+    call BbBuildDlOkDetail
+
+    ; The server reports which user its utility auth resolved, in
+    ; X-Test-User. A correct body with user 0 would mean the request was
+    ; served without ever authenticating -- a pass that proves nothing,
+    ; which is exactly what this test exists to catch.
+    call BbFindTestUser
+    or a, a
+    jp z, .notAuthed
+    ld a, [wBbAuthId]
+    cp a, "0"
+    jr nz, .userOk
+    ld a, [wBbAuthId + 1]
+    or a, a
+    jp z, .notAuthed ; the value is exactly "0"
+.userOk
+
+    ; ---- POST: same URL, same Authorization, no re-challenge --------
+    ld hl, wDnsResultIp
+    ld bc, 80
+    call MagbTcpOpen
+    or a, a
+    jp nz, .tcpOpenFail
+
+    call BbBuildSmallPostReq
+    ld hl, wBbReqBuf
+    ld a, [wBbReqLen]
+    ld c, a
+    ld a, [wBbReqLen + 1]
+    ld b, a
+    call BbSendAll
+    or a, a
+    jp nz, .upHdrFail
+
+    ; Body: BB_SMALL_SIZE bytes of body[i] == i & $FF, in one send --
+    ; it fits a single Transfer Data payload, which is the regime this
+    ; half of the pair is here to cover.
+    ld hl, wBbChunk
+    ld b, BB_SMALL_SIZE
+    ld c, 0
+.fill
+    ld a, c
+    ld [hl+], a
+    inc c
+    dec b
+    jr nz, .fill
+
+    ld de, wBbChunk
+    ld c, BB_SMALL_SIZE
+    call BbSendRaw
+    or a, a
+    jp nz, .upBodyFail
+
+    call BbStreamRecv
+    or a, a
+    jp nz, .closeAndReturn
+    call MagbTcpClose
+
+    ; A 401 here means the utility-auth window did not hold -- the one
+    ; thing this leg exists to check, and worth naming separately from a
+    ; checksum disagreement.
+    call BbStatusIs401
+    jp z, .authReuseRejected
+
+    ld a, [wBbBodyLen]
+    ld hl, wBbBodyLen + 1
+    or a, [hl]
+    jp z, .uploadMismatch
+    ld a, [wBbFirstBodyByte]
+    cp a, 1
+    jp nz, .uploadMismatch
+
+    call BbBuildUploadOkDetail
+    xor a, a
+    ret
+
+.noChallenge
+    call MagbTcpClose
+    ld hl, sBbNoChallenge
+    jr .failIsp
+.notAuthed
+    ld hl, sBbNotAuthed
+    jr .failIsp
+.authReuseRejected
+    ld hl, sBbAuthReuseRejected
+    jr .failIsp
+.shortBody
+    call BbBuildShortBodyDetail
+    ld hl, sBbShortBody
+    jr .failIsp
+.checksumBad
+    call BbBuildChecksumDetail
+    ld hl, sBbDlChecksumBad
+    jr .failIsp
+.uploadMismatch
+    call BbBuildUploadByteDetail
+    ld hl, sBbUploadMismatch
+.failIsp
+    ld a, l
+    ld [wBbFailMsgPtr], a
+    ld a, h
+    ld [wBbFailMsgPtr + 1], a
+    ld a, MAGB_ERR_ISP
+    ret
+
+.upHdrFail
+    push af
+    ld hl, sBbUpHdrFail
+    ld a, l
+    ld [wBbFailMsgPtr], a
+    ld a, h
+    ld [wBbFailMsgPtr + 1], a
+    pop af
+    jr .closeAndReturn
+.upBodyFail
+    push af
+    ld hl, sBbUpBodyFail
+    ld a, l
+    ld [wBbFailMsgPtr], a
+    ld a, h
+    ld [wBbFailMsgPtr + 1], a
+    pop af
+.closeAndReturn
+    push af
+    call MagbTcpClose
+    pop af
+    ret
+
+.reopenFail
+    push af
+    ld hl, sBbTcpReopenFail
+    jr .storeAndReturn
+.tcpOpenFail
+    push af
+    ld hl, sBbTcpOpenFail
+.storeAndReturn
+    ld a, l
+    ld [wBbFailMsgPtr], a
+    ld a, h
+    ld [wBbFailMsgPtr + 1], a
+    pop af
+    ret
+
+sBbNoChallenge:        db "NO CHALLENGE", 0
+sBbNotAuthed:          db "NOT AUTHENTICATED", 0
+sBbAuthReuseRejected:  db "AUTH REUSE REJECTED", 0
+sBbShortBody:          db "SHORT BODY", 0
+
+sBbGotPrefix: db "GOT "
+sBbGotPrefixEnd:
+sBbWantLabel: db " WANT "
+sBbWantLabelEnd:
+
+; "GOT <n> WANT <n>"
+BbBuildShortBodyDetail:
+    ld hl, wBbDetail0
+    ld de, sBbGotPrefix
+    ld b, sBbGotPrefixEnd - sBbGotPrefix
+    call BbAppend
+    ld a, [wBbBodyLen]
+    ld c, a
+    ld a, [wBbBodyLen + 1]
+    ld b, a
+    call BbAppendDecimal16
+    ld de, sBbWantLabel
+    ld b, sBbWantLabelEnd - sBbWantLabel
+    call BbAppend
+    ld bc, BB_SMALL_SIZE
+    jp BbAppendDecimal16

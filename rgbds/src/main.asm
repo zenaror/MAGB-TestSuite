@@ -2333,12 +2333,15 @@ RunIspHttpCore:
 ; wMenuSelected is) -- matches gbdk's `uint8_t sel = 0U;` being a normal
 ; local, not `static`, in ui_select_submenu().
 ;
-; Every item here is backed by a real implementation now. A standalone
-; "NEWS CONFIG" test used to exist (RunNewsConfigTest) as an isolated
-; diagnostic for just the config half of NEWS ARTICLE's flow --
-; removed once NEWS ARTICLE already exercised that same fetch on its
-; way to the article, making it redundant (matches gbdk's identical
-; removal of test_isp_http_gb00()/"NEWS CONFIG").
+; Every item here is backed by a real implementation.
+;
+; "NEWS CONFIG" and "NEWS ARTICLE" both used to live here and are both
+; gone. The first was redundant with the second; the second fetched
+; Pokemon Crystal's own news endpoints, and was replaced by "SMALL
+; BUFFER" so no test depends on another title's live data. SMALL BUFFER
+; is not just a rename: it keeps the doAuth(2) coverage NEWS ARTICLE was
+; the only holder of, and adds the Authorization-reuse POST that nothing
+; exercised before (see big_buffer.asm's SMALL BUFFER header).
 DEF ISP_SUBMENU_COUNT EQU 7
 
 IspSubMenuItemAddrs: ; rows 2-8, column 0 (cursor); matches gotoxy(0, 2+i)
@@ -2353,7 +2356,7 @@ IspSubMenuItemAddrs: ; rows 2-8, column 0 (cursor); matches gotoxy(0, 2+i)
 ; Exact wording/order matches gbdk's kIspLabels[] in src/main.c.
 IspSubMenuLabels:
     dw sSubTamagoEgg
-    dw sSubNewsArticle
+    dw sSubSmallBuffer
     dw sSubBigBuffer
     dw sSubTrainerHome
     dw sSubEmailSend
@@ -2362,7 +2365,7 @@ IspSubMenuLabels:
 
 IspSubMenuHandlers:
     dw RunTamagoEggTest
-    dw RunNewsArticleTest
+    dw RunSmallBufferTest
     dw RunBigBufferTest
     dw RunTrainerHomeTest
     dw RunEmailSendTest
@@ -2370,7 +2373,7 @@ IspSubMenuHandlers:
     dw RunRawTcpTest
 
 sSubTamagoEgg:   db "TAMAGO EGG", 0
-sSubNewsArticle: db "NEWS ARTICLE", 0
+sSubSmallBuffer: db "SMALL BUFFER", 0
 sSubBigBuffer:   db "BIG BUFFER", 0
 sSubTrainerHome: db "TRAINER HOME", 0
 sSubEmailSend:   db "EMAIL SEND", 0
@@ -2380,317 +2383,6 @@ sIspSubMenuTitle: db "ISP/HTTP", 0
 sSubMenuFooter:   db "A:RUN B:BACK", 0
 
 sSetIspPassword: db "SET ISP PASSWORD", 0
-
-; Real REON path, gbdk/include/test_config.h's TEST_HTTP_NEWS_CONFIG_PATH
-; -- same host as Tamago Egg/Trainer Home. get_news_parameters_bin()
-; unconditionally calls doAuth(2) (confirmed by reading news.php, not
-; assumed), so this always attempts the no-auth GET first and expects a
-; 401 in practice; Gb00FetchOne handles that transparently either way.
-sNewsConfigNoAuthReq:
-    db "GET /cgb/download?name=/01/CGB-BXTJ/news/config.php HTTP/1.0", $0D, $0A
-    db "Host: gameboy.datacenter.ne.jp", $0D, $0A
-    db "Connection: close", $0D, $0A
-    db $0D, $0A
-sNewsConfigNoAuthReqEnd:
-
-; Same request line/host as above, minus the no-auth-only headers, plus
-; the start of the Authorization header -- Gb00FetchOne appends the
-; computed 92-char value and a shared closing suffix itself (see
-; gb00_auth.asm's sGb00AuthSuffix). 120 bytes; + 92 + 24 = 236 total,
-; comfortably under MagbTransferData's 253-byte cap (confirmed by
-; counting the exact strings, not assumed).
-sNewsConfigAuthPrefix:
-    db "GET /cgb/download?name=/01/CGB-BXTJ/news/config.php HTTP/1.0", $0D, $0A
-    db "Host: gameboy.datacenter.ne.jp", $0D, $0A
-    db "Authorization: GB00 name=", $22
-sNewsConfigAuthPrefixEnd:
-
-; News Article's request/prefix strings (100.news.php, same host as
-; the News Config request strings above -- gbdk/include/test_config.h's
-; TEST_HTTP_NEWS_PATH). A standalone "News Config" test used to exist
-; here (RunNewsConfigTest, matching gbdk's now-removed
-; test_isp_http_gb00()) as an isolated diagnostic for just the config
-; fetch above -- removed once RunNewsArticleTest below already
-; exercises that same fetch (sNewsConfigNoAuthReq/sNewsConfigAuthPrefix
-; are still shared with it) on its way to the article, making a
-; standalone version redundant.
-sNewsArticleNoAuthReq:
-    db "GET /cgb/download?name=/01/CGB-BXTJ/news/100.news.php HTTP/1.0", $0D, $0A
-    db "Host: gameboy.datacenter.ne.jp", $0D, $0A
-    db "Connection: close", $0D, $0A
-    db $0D, $0A
-sNewsArticleNoAuthReqEnd:
-
-sNewsArticleAuthPrefix:
-    db "GET /cgb/download?name=/01/CGB-BXTJ/news/100.news.php HTTP/1.0", $0D, $0A
-    db "Host: gameboy.datacenter.ne.jp", $0D, $0A
-    db "Authorization: GB00 name=", $22
-sNewsArticleAuthPrefixEnd:
-
-sStageConfig:  db "STAGE: CONFIG", 0
-sStageArticle: db "STAGE: ARTICLE", 0
-
-; Prints "CFG <cfg_status> ART <art_status>" at HTTP_ADDR (row 5) --
-; matches gbdk's sprintf(out->detail[0], "CFG %s ART %s", ...).
-; Clobbers: everything (calls PrintString)
-ShowNewsArticleStatusLine:
-    ld hl, sNewsArticleCfgLabel
-    ld de, wGb00StatusMsg
-    ld b, 4 ; "CFG "
-.copyCfgLabel
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .copyCfgLabel
-
-    ld hl, wNewsArticleCfgStatus
-    ld b, 3
-.copyCfgVal
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .copyCfgVal
-
-    ld hl, sNewsArticleArtLabel
-    ld b, sNewsArticleArtLabelEnd - sNewsArticleArtLabel
-.copyArtLabel
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .copyArtLabel
-
-    ld hl, wGb00FetchStatusText
-    ld b, 3
-.copyArtVal
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .copyArtVal
-    xor a, a
-    ld [de], a
-
-    ld hl, wGb00StatusMsg
-    ld de, HTTP_ADDR
-    jp PrintString
-
-sNewsArticleCfgLabel: db "CFG "
-sNewsArticleArtLabel: db " ART "
-sNewsArticleArtLabelEnd:
-
-; ---- News Article (two GB00-authenticated fetches, one ISP session) ----
-;
-; Matches gbdk's test_isp_news_article(): same Begin Session -> Read
-; Identity -> Dial -> ISP Login -> one shared DNS Query as News Config,
-; then TWO Gb00FetchOne calls in the same session (config.php, then
-; 100.news.php) -- mirrors what a real game actually does for the
-; Goldenrod Communication Center news feature (fetch the config, then
-; the article itself). Neither fetch relies on REON's optional
-; session-level auth cache (see gbdk's own comment on this) -- each
-; gets its own real challenge/response.
-; Clobbers: everything
-RunNewsArticleTest:
-    call ClearTextScreen
-    ld hl, sSubNewsArticle
-    ld de, $9801
-    call PrintString
-
-    ld a, [wIspPassword]
-    or a, a
-    jp z, .noPassword
-
-    ld a, CMD_SESSION
-    call SetCommand
-    ld a, STATUS_WAKE
-    call SetStatus
-    call MagbBeginSession
-    or a, a
-    jp nz, .showFail
-
-    ld a, CMD_READ_ID
-    call SetCommand
-    call ReadIdentity
-    or a, a
-    jp nz, .showFail
-
-    ld a, CMD_DIAL
-    call SetCommand
-    ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
-    ld [wExecTimeoutFrames], a
-    ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
-    ld [wExecTimeoutFrames + 1], a
-    ld hl, wIdentityPhone
-    ld b, 0
-.phoneLenLoop
-    ld a, [hl+]
-    or a, a
-    jr z, .havePhoneLen
-    inc b
-    jr .phoneLenLoop
-.havePhoneLen
-    ld hl, wIdentityPhone
-    call MagbDial
-    or a, a
-    jp nz, .showFail
-
-    ld a, CMD_ISP_LOGIN
-    call SetCommand
-    call BuildIspLoginPayload
-    call MagbIspLogin
-    or a, a
-    jp nz, .showFail
-
-    ld a, CMD_DNS
-    call SetCommand
-    ld hl, sDnsHostname
-    ld b, sDnsHostnameEnd - sDnsHostname
-    call MagbDnsQuery
-    or a, a
-    jp nz, .showFail
-
-    ; Fetch 1: news config
-    ld a, CMD_HTTP
-    call SetCommand
-    ld hl, sNewsConfigNoAuthReq
-    ld a, l
-    ld [wGb00FetchNoAuthPtr], a
-    ld a, h
-    ld [wGb00FetchNoAuthPtr + 1], a
-    ld a, sNewsConfigNoAuthReqEnd - sNewsConfigNoAuthReq
-    ld [wGb00FetchNoAuthLen], a
-    ld hl, sNewsConfigAuthPrefix
-    ld a, l
-    ld [wGb00FetchAuthPrefixPtr], a
-    ld a, h
-    ld [wGb00FetchAuthPrefixPtr + 1], a
-    ld a, sNewsConfigAuthPrefixEnd - sNewsConfigAuthPrefix
-    ld [wGb00FetchAuthPrefixLen], a
-    ld hl, wIdentityLogin
-    ld a, l
-    ld [wGb00FetchLoginPtr], a
-    ld a, h
-    ld [wGb00FetchLoginPtr + 1], a
-    ld hl, wIspPassword
-    ld a, l
-    ld [wGb00FetchPasswordPtr], a
-    ld a, h
-    ld [wGb00FetchPasswordPtr + 1], a
-    call Gb00FetchOne
-    or a, a
-    jp nz, .showConfigFail
-
-    ; wGb00FetchStatusText gets overwritten by the article fetch below --
-    ; stash the config fetch's status text before that happens.
-    ld hl, wGb00FetchStatusText
-    ld de, wNewsArticleCfgStatus
-    ld b, 4
-.copyCfgStatus
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .copyCfgStatus
-
-    ; Fetch 2: news article (login/password pointers are unchanged from
-    ; the config fetch above -- only the request text differs)
-    ld hl, sNewsArticleNoAuthReq
-    ld a, l
-    ld [wGb00FetchNoAuthPtr], a
-    ld a, h
-    ld [wGb00FetchNoAuthPtr + 1], a
-    ld a, sNewsArticleNoAuthReqEnd - sNewsArticleNoAuthReq
-    ld [wGb00FetchNoAuthLen], a
-    ld hl, sNewsArticleAuthPrefix
-    ld a, l
-    ld [wGb00FetchAuthPrefixPtr], a
-    ld a, h
-    ld [wGb00FetchAuthPrefixPtr + 1], a
-    ld a, sNewsArticleAuthPrefixEnd - sNewsArticleAuthPrefix
-    ld [wGb00FetchAuthPrefixLen], a
-    call Gb00FetchOne
-    or a, a
-    jp nz, .showArticleFail
-
-    call ShowNewsArticleStatusLine
-
-    ld a, CMD_ISP_LOGOUT
-    call SetCommand
-    call MagbIspLogout
-
-    ld a, CMD_HANGUP
-    call SetCommand
-    call MagbHangup
-
-    ld a, CMD_END_SESSION
-    call SetCommand
-    call MagbEndSession
-
-    call SoundSuccess
-    ld hl, sPass
-    ld de, RESULT_ADDR
-    call PrintString
-    jp WaitForBackButton
-
-.noPassword
-    call SoundError
-    ld hl, sFail
-    ld de, RESULT_ADDR
-    call PrintString
-    ld hl, sSetIspPassword
-    ld de, ERROR_ADDR
-    call PrintString
-    jp WaitForBackButton
-
-.showConfigFail
-    ld hl, sStageConfig
-    jr .showGb00OrProtoFail
-.showArticleFail
-    ld hl, sStageArticle
-.showGb00OrProtoFail
-    push hl ; stage label, printed at HTTP_ADDR below the FAIL/error line
-    cp a, MAGB_ERR_ISP
-    jr nz, .protoFail
-    push af
-    call SoundError
-    ld hl, sFail
-    ld de, RESULT_ADDR
-    call PrintString
-    ld a, [wGb00FetchFailMsgPtr]
-    ld l, a
-    ld a, [wGb00FetchFailMsgPtr + 1]
-    ld h, a
-    ld de, ERROR_ADDR
-    call PrintString
-    pop af
-    pop hl
-    ld de, HTTP_ADDR
-    call PrintString
-    jp WaitForBackButton
-.protoFail
-    push af
-    call SoundError
-    ld hl, sFail
-    ld de, RESULT_ADDR
-    call PrintString
-    pop af
-    call PrintErrorCode
-    pop hl
-    ld de, HTTP_ADDR
-    call PrintString
-    jp WaitForBackButton
-
-.showFail
-    push af
-    call SoundError
-    ld hl, sFail
-    ld de, RESULT_ADDR
-    call PrintString
-    pop af
-    call PrintErrorCode
-    jp WaitForBackButton
 
 ; ---- BIG BUFFER (streamed download + upload round-trip) -----------------
 ;
@@ -2704,9 +2396,25 @@ RunNewsArticleTest:
 ; refuses to run at all without an ISP PASSWORD rather than sending a
 ; guessed one (see wIspPassword's own note).
 ; Clobbers: everything
+; Both buffer tests share this entire body -- they differ only in the
+; screen title and in which transfer routine runs between DNS and ISP
+; Logout. Duplicating ~300 bytes of identical session handling in an
+; almost-full ROM0 would be the only alternative.
+RunSmallBufferTest:
+    ld hl, sSubSmallBuffer
+    ld de, BbRunSmallTransfer
+    jr RunBufferTestCommon
 RunBigBufferTest:
-    call ClearTextScreen
     ld hl, sSubBigBuffer
+    ld de, BbRunTransfer
+RunBufferTestCommon:
+    ld a, e
+    ld [wBufferTestFn], a
+    ld a, d
+    ld [wBufferTestFn + 1], a
+    push hl
+    call ClearTextScreen
+    pop hl
     ld de, $9801
     call PrintString
 
@@ -2770,7 +2478,11 @@ RunBigBufferTest:
 
     ld a, CMD_HTTP
     call SetCommand
-    call BbRunTransfer
+    ld hl, wBufferTestFn
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    call BbCallHl
     or a, a
     jp nz, .transferFail
 
@@ -2861,6 +2573,11 @@ ShowBigBufferDetails:
     jp PrintString
 
 DEF DETAIL2_ADDR EQU $98E1 ; row 7, col 1 -- below ERROR_ADDR's row 6
+
+; SM83 has no `call [hl]`, so the shared buffer-test body reaches its
+; per-test transfer routine through this one-instruction trampoline.
+BbCallHl:
+    jp hl
 
 ; ---- Email Send (SMTP, port 25) -----------------------------------------
 ;
@@ -5216,10 +4933,7 @@ wIspLoginBuiltPayload: ds ISP_LOGIN_PAYLOAD_MAX
 wIspLoginBuiltLen: db
 
 SECTION "News Test Scratch", WRAM0
-wGb00StatusMsg: ds 16 ; "HTTP nnn (AUTH)" or "CFG nnn ART nnn" + NUL
-wNewsArticleCfgStatus: ds 4 ; News Article's config-fetch status, stashed
-                             ; before the article fetch overwrites
-                             ; wGb00FetchStatusText
+wGb00StatusMsg: ds 16 ; "HTTP nnn (AUTH)" + NUL
 
 ; Big enough for every command/message *this ROM sends* (wEmailCmdBuf
 ; only), never for a real server reply -- see EMAIL_RECV_BUF_SIZE
@@ -5316,6 +5030,9 @@ wTraceIdxRx: db
 wTraceRowAddr: dw   ; current tilemap row address
 
 SECTION "Menu State", WRAM0
+; Which transfer routine RunBufferTestCommon should call -- the only
+; thing that differs between SMALL BUFFER and BIG BUFFER.
+wBufferTestFn: dw
 wMenuSelected: db  ; currently highlighted item, 0..MENU_ITEM_COUNT-1
 wMenuNewSel: db    ; ShowMenu's .storeSel scratch: new index, survives the
                     ; DrawMenuCursor call that erases the old cursor first
