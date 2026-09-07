@@ -102,26 +102,37 @@
 #define TEST_HTTP_PORT        80
 #define TEST_HTTP_PATH        "/cgb/download?name=/01/CGB-BXTJ/tamago/index.txt"
 
-/* Two more real, no-invented-URL targets on the same host, from the
- * same REON test dataset, covering Pokémon Crystal's other real
- * Mobile Adapter datacenter feature: the Goldenrod Communication
- * Center "News" service (`web/cgb/download/01/CGB-BXTJ/news/`).
+/* REON's synthetic MAGBTEST fixtures. Neither is a real licensed
+ * title's endpoint -- deliberately not a "CGB-XXXX-NN"-shaped folder,
+ * since that format belongs to real cartridges (see repo-root
+ * CLAUDE.md: "This is NOT a Pokemon Crystal clone and must not contain
+ * Pokemon-specific game code").
  *
- * Both of these require REON's GB00 challenge/response HTTP auth --
- * confirmed by reading web/cgb/pokemon/news.php, not assumed: unlike
- * the tamago index.txt above, BOTH get_news_parameters_bin()
- * (config.php) and get_news_file() (100.news.php) unconditionally
- * call doAuth(2) ("Pokémon news + ranking endpoints require auth even
- * if free"). The numeric-cost-prefix exemption that lets tamago's
- * index.txt through only skips the *front controller's* cost check --
- * it does not stop the PHP script itself from demanding auth once
- * executed. This TestSuite implements that handshake (see
- * `include/gb00_auth.h`, `test_isp_news_article()` in test_runner.c,
- * and docs/protocol-notes.md's "GB00 HTTP authentication") using the
- * adapter's own live-config login ID (falling back to TEST_ISP_LOGIN)
- * and the ISP PASSWORD menu's password as the account credentials. */
-#define TEST_HTTP_NEWS_CONFIG_PATH "/cgb/download?name=/01/CGB-BXTJ/news/config.php"
-#define TEST_HTTP_NEWS_PATH        "/cgb/download?name=/01/CGB-BXTJ/news/100.news.php"
+ * These replaced a "NEWS ARTICLE" test that fetched Pokemon Crystal's
+ * own news endpoints (/01/CGB-BXTJ/news/config.php and 100.news.php).
+ * It worked, but it validated the GB00 handshake against real game
+ * data; the project owner asked for synthetic data instead, which is
+ * what these are.
+ *
+ * The two differ only in size, and that difference is the point:
+ *
+ *   BIG   (TEST_BIGBUFFER_SIZE) is far larger than one Transfer Data
+ *         (0x15) response and than any buffer this ROM could hold, so
+ *         it exercises the streaming path -- a running 16-bit additive
+ *         checksum computed chunk by chunk, never buffered in full --
+ *         plus a full upload round trip.
+ *   SMALL (TEST_SMALLBUFFER_SIZE) fits in a SINGLE Transfer Data
+ *         response, so it exercises the opposite regime: no streaming,
+ *         no chunking, header and body arriving together.
+ *
+ * They also reach different halves of REON's auth. download.php calls
+ * doAuth(1) and upload.php calls doAuth() (type 0), which is what BIG
+ * uses. doAuth(2) -- "utility" auth -- is reached only by a script that
+ * authenticates itself, the way news.php does, with download.php's
+ * $skipCostAuth letting it through. SMALL mirrors that mechanism, so
+ * removing the news test does not take doAuth(2) coverage with it.
+ * See docs/protocol-notes.md, "GB00: download and upload do NOT
+ * authenticate the same way". */
 
 /* REON's dedicated "BIG BUFFER" stress-test fixture -- unlike every
  * other path above, this is NOT a real licensed title's endpoint
@@ -141,6 +152,18 @@
 #define TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH "/cgb/download?name=/01/MAGBTEST/0.bigbuffer.cgb"
 #define TEST_HTTP_BIGBUFFER_UPLOAD_PATH   "/cgb/upload?name=/01/MAGBTEST/0.bigbuffer.cgb"
 #define TEST_BIGBUFFER_SIZE 8192U
+
+/* The small half of the pair. 128 bytes fits inside one Transfer Data
+ * payload, so the whole response lands in a single read -- the regime
+ * BIG BUFFER never touches. Same body contract as BIG (body[i] ==
+ * i & 0xFF) and the same X-Test-Checksum header, so there is only one
+ * format to reason about; the expected checksum is 127*128/2 = 8128
+ * (0x1FC0). Reached through REON's doAuth(2) rather than doAuth(1),
+ * which requires a self-authenticating script server-side plus a
+ * download.php $skipCostAuth entry -- see this file's block comment
+ * above and the note in docs/protocol-notes.md. */
+#define TEST_HTTP_SMALLBUFFER_PATH "/cgb/download?name=/01/MAGBTEST/0.smallbuffer.cgb"
+#define TEST_SMALLBUFFER_SIZE 128U
 
 /* Mobile Trainer's real home page -- Dan Docs' "Mobile Trainer"
  * section documents this exact observed URL

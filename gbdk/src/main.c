@@ -5,6 +5,7 @@
 #include "test_config.h"
 #include "ui.h"
 #include "sound.h"
+#include "save.h"
 
 #include <string.h>
 
@@ -29,7 +30,14 @@ void main(void)
      * power-off. Capped at TEST_ISP_PASSWORD_MAX_LEN (8) chars --
      * ui_edit_text() derives its own editable length from
      * sizeof(isp_password), so this is the only place that limit needs
-     * to be expressed. */
+     * to be expressed.
+     *
+     * No longer lost on power-off: it is restored from battery-backed
+     * cart SRAM at boot and written back whenever it is edited (see
+     * save.h, and note what that means for the .sav file). Still not a
+     * compile-time default -- an absent or unreadable save leaves this
+     * empty and the authenticating tests still refuse to run, which is
+     * the behaviour that made the old guessed default worth deleting. */
     static char isp_password[TEST_ISP_PASSWORD_MAX_LEN + 1U];
     static char raw_tcp_ip[13] = TEST_ISP_RAW_IP;
     static test_result_t result;
@@ -37,6 +45,7 @@ void main(void)
 
     serial_hw_init(); /* fatal error screen + halt if not a CGB */
     sound_init();
+    (void)save_load_password(isp_password, sizeof(isp_password));
 
     magb_context_init(&ctx);
     ctx.cancel_check = ui_check_cancel;
@@ -59,18 +68,19 @@ void main(void)
             break;
 
         case UI_MENU_ISP_HTTP: {
-            /* "NEWS ARTICLE" requires REON's GB00 auth (confirmed by
-             * reading news.php -- see docs/protocol-notes.md) and
-             * fetches config *and* article in one ISP session, matching
-             * the real game's actual flow (test_isp_news_article()).
-             * A standalone "NEWS CONFIG" test used to exist as an
-             * isolated diagnostic for just the config half, but "NEWS
-             * ARTICLE" already exercises that same fetch on its way to
-             * the article, making the standalone version redundant --
-             * removed rather than kept as dead weight. */
+            /* "SMALL BUFFER" and "BIG BUFFER" are a deliberate pair:
+             * same synthetic pattern, same checksum contract, but
+             * opposite ends of both size and authentication. SMALL fits
+             * one Transfer Data response and goes through REON's
+             * doAuth(2) with Authorization reuse; BIG streams 8 KiB and
+             * goes through doAuth(1) plus the type-0 Gb-Auth-ID upload.
+             * Together they replaced a "NEWS ARTICLE" test that proved
+             * the same handshake against Pokemon Crystal's real news
+             * endpoints -- removed so this ROM stops depending on
+             * another title's live data. */
             static const char *const kIspLabels[] = {
                 "TAMAGO EGG",
-                "NEWS ARTICLE",
+                "SMALL BUFFER",
                 "BIG BUFFER",
                 "TRAINER HOME",
                 "EMAIL SEND",
@@ -100,8 +110,8 @@ void main(void)
                 ui_show_result("TAMAGO EGG", &result);
                 break;
             case 1U:
-                test_isp_news_article(&ctx, &result, isp_password);
-                ui_show_result("NEWS ARTICLE", &result);
+                test_isp_small_buffer(&ctx, &result, isp_password);
+                ui_show_result("SMALL BUFFER", &result);
                 break;
             case 2U:
                 test_isp_big_buffer(&ctx, &result, isp_password);
@@ -138,7 +148,11 @@ void main(void)
         }
 
         case UI_MENU_ISP_PASSWORD:
-            (void)ui_edit_text(isp_password, sizeof(isp_password), "ISP PASSWORD");
+            /* Persist on confirm only. Cancelling out of the editor
+             * leaves both the in-RAM copy and the save untouched. */
+            if (ui_edit_text(isp_password, sizeof(isp_password), "ISP PASSWORD")) {
+                save_store_password(isp_password);
+            }
             break;
 
         case UI_MENU_P2P_CALLER:

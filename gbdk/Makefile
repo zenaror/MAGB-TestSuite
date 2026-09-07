@@ -46,6 +46,7 @@ SRCS := \
     src/app/test_runner.c \
     src/app/ui.c \
     src/app/gb00_auth.c \
+    src/app/save.c \
     src/app/sound.c
 
 # CFLAGS_EXTRA: extra -D/-I flags, e.g. to override include/test_config.h
@@ -60,7 +61,14 @@ CFLAGS_EXTRA ?=
 #   -Wm-yC     mark the ROM as CGB-only (header byte 0x143 = 0xC0)
 #   -Wm-yn"..."  set the cartridge title
 #
-#   -Wl-yt0x19   cartridge type MBC5, no cart RAM (header byte 0x147)
+#   -Wl-yt0x1B   cartridge type MBC5 + RAM + BATTERY (header 0x147)
+#   -Wl-ya1      one 8 KiB cart RAM bank (header 0x149)
+#
+# The battery-backed RAM is not for the mapper's sake -- it holds the
+# ISP password across power cycles (src/app/save.c). The mapper came
+# first, for code space; once it was there, RAM+BATTERY was a header
+# byte away and the password no longer has to be retyped every boot.
+# See include/save.h on what that means for the resulting .sav file.
 #   -Wm-yoA      let bankpack size the ROM (auto bank count)
 #   -autobank    run bankpack to assign `#pragma bank 255` areas
 #
@@ -125,7 +133,7 @@ CFLAGS_EXTRA ?=
 # comment. Interrupt handlers are fine as-is: the 0x40/0x48 vectors
 # dispatch into crt0 code below 0x1000 and the serial IRQ is unused
 # (this ROM polls SC_REG), so nothing in an ISR path is ever unmapped.
-LCCFLAGS := -msm83:gb -Wm-yC -Wl-yt0x19 -Wm-yoA -autobank -Wb-ext=.rel -Wb-min=2 \
+LCCFLAGS := -msm83:gb -Wm-yC -Wl-yt0x1B -Wl-ya1 -Wm-yoA -autobank -Wb-ext=.rel -Wb-min=2 \
             -Wl-b_HOME=0x0200 -Wl-b_CODE=0x0C00 \
             -Wm-yn"$(ROM_NAME)" -I$(INCLUDE_DIR) $(CFLAGS_EXTRA)
 
