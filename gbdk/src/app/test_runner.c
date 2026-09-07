@@ -1259,7 +1259,20 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
     isp_http_cleanup(ctx, 0U, false, true);
 
     if (res.body_len < 1U || res.first_body_byte != 0x01U) {
-        sprintf(out->detail[1], "UP BYTE=%hx", res.first_body_byte);
+        /* The upload handler echoes the checksum it computed over what
+         * it actually received, in the response's own X-Test-Checksum --
+         * which gb00_stream_continue() has already parsed. Showing that
+         * next to ours turns "the upload failed" into "the server saw
+         * THIS instead", which is the difference between a retry and a
+         * diagnosis (a truncated body, for instance, lands on a
+         * recognisably smaller sum). */
+        if (res.checksum_present) {
+            sprintf(out->detail[1], "SRV %hx%hx WE %hx%hx",
+                    (uint8_t)(res.expected_checksum >> 8), (uint8_t)(res.expected_checksum & 0xFFU),
+                    (uint8_t)(dl_checksum >> 8), (uint8_t)(dl_checksum & 0xFFU));
+        } else {
+            sprintf(out->detail[1], "UP BYTE=%hx", res.first_body_byte);
+        }
         result_fail(out, MAGB_ERR_ISP, "UPLOAD MISMATCH");
         return;
     }

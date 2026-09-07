@@ -1014,3 +1014,25 @@ Two smaller facts from the same source, worth not re-deriving:
 The session id is `bin2hex(random_bytes(16))`, 32 characters today.
 Neither ROM assumes that width: both parse `Gb-Auth-ID` as an opaque
 token up to a generous cap and refuse rather than truncate past it.
+
+### The MAGBTEST fixture (server-side, confirmed)
+
+REON has no shared git remote — the production server is the only place
+these files exist, so a local checkout can never answer "does this
+fixture exist?". Confirmed by the person running that server:
+
+- `web/cgb/download/01/MAGBTEST/0.bigbuffer.php` serves 8192 bytes,
+  `body[i] == i & 0xFF`, with `X-Test-Checksum: F000`. The `.cgb` in the
+  requested path resolves to `.php` through `core.php`'s
+  "file doesn't exist, try .php" fallback.
+- `web/cgb/upload/01/MAGBTEST/0.bigbuffer.php` recomputes the same
+  16-bit additive sum over the POSTed body, compares it against the
+  request's `X-Test-Checksum`, and `echo`es `"\x01"` on a match or
+  `"\x00"` otherwise. It also returns its own computed value in the
+  response's `X-Test-Checksum`, so a rejection says what the server
+  actually received rather than only that it disagreed. Both ROMs show
+  that value beside their own on failure.
+
+`F000` is independently derivable and worth keeping as a regression
+constant: the body is 32 complete 0..255 ramps, and
+`32 * (255*256/2) = 1044480`, which is `0xF000` mod 65536.
