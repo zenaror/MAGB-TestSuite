@@ -2414,7 +2414,7 @@ sSubMenuFooter:   db "A:RUN B:BACK", 0
 
 sSetIspPassword: db "SET ISP PASSWORD", 0
 
-; ---- SESSION RITUAL ----------------------------------------------------
+; ---- The pre-connection ritual, run before EVERY test -----------------
 ;
 ; Reproduces what a real Mobile Trainer does before it dials: five
 ; sessions, four of them throwaway, separated by seconds of silence,
