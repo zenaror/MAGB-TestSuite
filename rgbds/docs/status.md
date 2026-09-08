@@ -1441,8 +1441,8 @@ Notes worth keeping:
 Cost: ~2.5 KiB in `ROMX` bank 1 (10096 still free), ~305 bytes in `ROM0`
 (3051 free), 614 bytes of WRAM bank 1.
 
-Not runtime-verified. Needs a real REON MAGBTEST fixture serving both
-paths; see "Manual tests requested" in the session that added it.
+**Verified against the real server on 2026-09-08**: `DL 8192 B OK` /
+`UPLOAD OK`, checksum `F000` agreeing in both directions.
 
 ## SMALL BUFFER, and the removal of NEWS ARTICLE
 
@@ -1495,7 +1495,10 @@ Net effect on space, after adding a test: ROM0 3981 free (was 3039),
 ROMX 9101 free (was 9730 before SMALL BUFFER, 6288 used at its peak),
 WRAM0 390 free (was 123).
 
-Not runtime-verified yet.
+**Verified against the real server on 2026-09-08**, after two bugs that
+took a BGB serial capture to find — an `Authorization` buffer overflow
+and a response arriving bundled with the send that completed the
+request. Both are written up in `gbdk/docs/protocol-notes.md`.
 
 ## Cartridge save (MBC5 + RAM + BATTERY)
 
@@ -1541,7 +1544,9 @@ ROM-address write exists anywhere outside `save.asm`. (The GBDK ROM has
 been running on MBC5 for a while and passes, which is the empirical
 half of the same answer.)
 
-Not runtime-verified.
+Still not runtime-verified: the save has not been exercised across an
+actual power cycle (edit the password, power off, power on, check the
+field came back). Everything else in this ROM has.
 
 
 ## No session ritual (and why there was one)
@@ -1558,3 +1563,28 @@ Removed. The sequence is recorded as an observation in
 receive pacing, which stays. `MagbReadConfig` is back to the fixed
 `0x60+0x60` split it always used.
 
+
+## Runtime status, 2026-09-08
+
+Every test in both ROMs passes against the real REON server:
+
+| test | GBDK | RGBDS |
+|---|---|---|
+| ADAPTER/SESSION | pass | pass |
+| READ CONFIG | pass | pass |
+| TAMAGO EGG | pass | pass |
+| SMALL BUFFER | pass | pass |
+| BIG BUFFER | pass | pass |
+| TRAINER HOME | pass | pass |
+| EMAIL SEND | pass | pass |
+| EMAIL RECV (incl. delete) | pass | pass |
+
+Not covered by that: the cartridge save across a real power cycle, and
+RAW TCP, which is an interactive viewer with no pass/fail.
+
+Worth remembering about EMAIL RECV: it deletes **only** messages
+carrying its own subject, and reads headers with `TOP n 0` rather than
+fetching bodies. The real Mobile Trainer does the opposite — it `RETR`s
+what it downloads and deletes all of it. The difference is deliberate:
+this test runs against the owner's real mailbox, and a test that removed
+everything it found would delete real mail.
