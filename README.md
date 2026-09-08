@@ -43,6 +43,18 @@ simple text menu on the Game Boy screen:
    ROM instances dialing each other directly and exchanging a
    deterministic binary payload.
 
+5. **Server conformance** — a separate section, deliberately not mixed
+   in with the tests above. Those pass when the adapter, `libmobile` and
+   the link behave; these pass when the *server* is correctly
+   configured, and can fail while the adapter is perfect. One test so
+   far: **Auth Prefix** sends a GB00 credential whose first 44
+   characters are correct and whose remainder is not, and requires the
+   server to refuse it — those 44 characters are only an echo of the
+   challenge the server itself published, so a server that accepts them
+   authenticates anyone who can read a `401`. That was a real defect,
+   found through this suite; see
+   [`gbdk/docs/protocol-notes.md`](gbdk/docs/protocol-notes.md).
+
 The ISP account password is entered on-device and kept in
 battery-backed cartridge SRAM, so it survives a power cycle. It is
 never compiled in: a test that needs authentication refuses to run

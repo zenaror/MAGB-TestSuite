@@ -2381,3 +2381,188 @@ BbBuildShortBodyDetail:
     call BbAppend
     ld bc, BB_SMALL_SIZE
     jp BbAppendDecimal16
+
+
+; ---- Server conformance: the prefix of an Authorization must not be
+; ---- enough to authenticate ---------------------------------------------
+;
+; NOT an adapter test, and deliberately not reachable from the ISP/HTTP
+; submenu: everything there passes when the adapter, libmobile and the
+; link behave. This one tests the SERVER, and can fail while every
+; adapter test passes. Mixing the two would make a red result ambiguous
+; about which side is broken, which is the one thing this ROM exists to
+; avoid. It has its own main-menu entry ("SERVER CONF").
+;
+; The first GB00_AUTH_PREFIX_LEN characters of an Authorization are an
+; echo of the challenge the server itself just published in its 401.
+; Anyone who can read that 401 reproduces them without knowing any
+; credential, so a server validating only the prefix authenticates
+; nobody. REON did exactly that in its utility-auth cache -- found from
+; this ROM's side, by accident, when a buffer overflow truncated a real
+; Authorization and the server accepted it anyway (see
+; gbdk/docs/protocol-notes.md, "An authentication bypass in REON's
+; utility-auth cache").
+;
+; Uses SMALL BUFFER's endpoint on purpose: that is the doAuth(2) path
+; whose cache held the bypass, so this exercises the fixed code rather
+; than a neighbour of it.
+;
+; Same contract as BbRunTransfer/BbRunSmallTransfer: everything between
+; DNS Query and ISP Logout. Requires wDnsResultIp, wIdentityLogin and
+; wIspPassword set.
+; Output: A = result (0=OK); wBbFailMsgPtr set on failure, wBbDetail0/1
+;         hold the summary lines.
+; Clobbers: everything
+BbRunAuthPrefix::
+    call BbClearDetails
+
+    ld hl, wDnsResultIp
+    ld bc, 80
+    call MagbTcpOpen
+    or a, a
+    jp nz, .tcpOpenFail
+
+    ; Unauthenticated GET, purely to collect a real challenge.
+    ld de, sBbSmallNoAuthReq
+    ld bc, sBbSmallNoAuthReqEnd - sBbSmallNoAuthReq
+    call BbLoadStaticReq
+    call BbSendBuiltRequest
+    or a, a
+    jp nz, .closeAndReturn
+
+    call BbStatusIs401
+    jp nz, .noChallenge
+
+    call BbChallengeAuth
+    or a, a
+    jr nz, .haveAuth
+    call MagbTcpClose
+    ld a, MAGB_ERR_ISP
+    ret
+
+.haveAuth
+    ; Keep the prefix, destroy the rest, in place in wGb00Authorization
+    ; before BbBuildSmallAuthReq copies it into the request.
+    ;
+    ; Flipping each remaining character between "A" and "B" guarantees
+    ; every one of them changes. A fixed filler could in principle
+    ; coincide with the real tail, and a negative test that silently
+    ; sent a VALID credential would pass while proving the opposite of
+    ; what it claims. Both are base64 characters, so the value still
+    ; decodes -- it decodes to the wrong bytes. The length is unchanged,
+    ; so what the server sees is well-formed in every respect except the
+    ; credential itself.
+    ld hl, wGb00Authorization + GB00_AUTH_PREFIX_LEN
+    ld b, GB00_AUTHORIZATION_LEN - GB00_AUTH_PREFIX_LEN
+.corruptLoop
+    ld a, [hl]
+    cp a, "A"
+    ld a, "A"
+    jr nz, .corruptWrite
+    ld a, "B"
+.corruptWrite
+    ld [hl+], a
+    dec b
+    jr nz, .corruptLoop
+
+    ; REON requires the connection closed and reopened between the
+    ; challenge and the authenticated retry -- not an optimisation, the
+    ; retry fails on a reused connection.
+    call MagbTcpClose
+    ld hl, wDnsResultIp
+    ld bc, 80
+    call MagbTcpOpen
+    or a, a
+    jp nz, .reopenFail
+
+    call BbBuildSmallAuthReq
+    call BbSendBuiltRequest
+    or a, a
+    jp nz, .closeAndReturn
+    call MagbTcpClose
+
+    ; Anything that is not a 401 served this request. A 200 is the
+    ; bypass itself; any other status is still the server failing to
+    ; reject a credential it had every reason to reject.
+    call BbStatusIs401
+    jr nz, .bypassOpen
+
+    ; Which 401 this is decides whether anything was actually judged.
+    ; Gb-Status present = full validation ran and said no. Absent = the
+    ; challenge was gone, so the credential was never examined: not a
+    ; pass, and not a failure of the server either. The two are mutually
+    ; exclusive in REON's own source -- see BbRunSmallTransfer's note.
+    call BbFindGbStatus
+    or a, a
+    jr z, .challengeExpired
+
+    ; PASS. The detail carries the Gb-Status VALUE rather than a fixed
+    ; "rejected" string: 201 is the server's own verdict code, and
+    ; printing it means a future server answering some other code shows
+    ; up instead of being flattened into the same PASS.
+    ld hl, wBbDetail0
+    ld de, sBbGbStPrefix
+    ld b, sBbGbStPrefixEnd - sBbGbStPrefix
+    call BbAppend
+    ld de, wBbAuthId
+    call BbAppendStr
+    xor a, a
+    ld [hl], a ; terminate the detail, and A is already the OK result
+    ret
+
+.bypassOpen
+    ; "HTTP <status>" on the second line, so a 200 (the bypass) is
+    ; distinguishable on screen from any other unexpected status.
+    ld hl, wBbDetail1
+    ld de, sBbHttpPrefix
+    ld b, sBbHttpPrefixEnd - sBbHttpPrefix
+    call BbAppend
+    ld de, wGb00FetchStatusText
+    call BbAppendStr
+    xor a, a
+    ld [hl], a
+    ld hl, sBbBypassOpen
+    jr .failIsp
+.noChallenge
+    ; The endpoint served us without ever asking for authentication, so
+    ; no credential was offered and none was judged. A fixture problem,
+    ; not a security finding -- calling it a bypass would be a false
+    ; alarm.
+    call MagbTcpClose
+    ld hl, sBbNoChallenge
+    jr .failIsp
+.challengeExpired
+    ld hl, sBbChallengeExpired
+.failIsp
+    ld a, l
+    ld [wBbFailMsgPtr], a
+    ld a, h
+    ld [wBbFailMsgPtr + 1], a
+    ld a, MAGB_ERR_ISP
+    ret
+
+.closeAndReturn
+    push af
+    call MagbTcpClose
+    pop af
+    ret
+.reopenFail
+    push af
+    ld hl, sBbTcpReopenFail
+    jr .storeAndReturn
+.tcpOpenFail
+    push af
+    ld hl, sBbTcpOpenFail
+.storeAndReturn
+    ld a, l
+    ld [wBbFailMsgPtr], a
+    ld a, h
+    ld [wBbFailMsgPtr + 1], a
+    pop af
+    ret
+
+sBbBypassOpen: db "BYPASS OPEN", 0
+sBbGbStPrefix: db "GB-ST "
+sBbGbStPrefixEnd:
+sBbHttpPrefix: db "HTTP "
+sBbHttpPrefixEnd:

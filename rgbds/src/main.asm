@@ -2396,6 +2396,19 @@ sSetIspPassword: db "SET ISP PASSWORD", 0
 ; screen title and in which transfer routine runs between DNS and ISP
 ; Logout. Duplicating ~300 bytes of identical session handling in an
 ; almost-full ROM0 would be the only alternative.
+; Server conformance, reached from the main menu rather than the
+; ISP/HTTP submenu -- see sMenuServerConf. It needs the exact same
+; session harness (Begin Session -> Read Identity -> Dial -> ISP Login
+; -> DNS ... teardown), so it rides RunBufferTestCommon like the two
+; buffer tests do; only the title and the transfer routine differ. It
+; authenticates for real, so the same "refuse without an ISP PASSWORD"
+; rule applies -- and here it matters twice over: without the password
+; there is no VALID Authorization to damage, and the request would be
+; refused for a reason that has nothing to do with the prefix.
+RunAuthPrefixTest:
+    ld hl, sMenuServerConf
+    ld de, BbRunAuthPrefix
+    jr RunBufferTestCommon
 RunSmallBufferTest:
     ld hl, sSubSmallBuffer
     ld de, BbRunSmallTransfer
@@ -4303,15 +4316,16 @@ RunIspHttpMenu:
 
 ; ---- Main menu data ---------------------------------------------------
 
-DEF MENU_ITEM_COUNT EQU 6
+DEF MENU_ITEM_COUNT EQU 7
 
-MenuItemAddrs: ; rows 4-9, column 0 (cursor); matches gbdk's gotoxy(0, 4+i)
+MenuItemAddrs: ; rows 4-10, column 0 (cursor); matches gbdk's gotoxy(0, 4+i)
     dw $9880
     dw $98A0
     dw $98C0
     dw $98E0
     dw $9900
     dw $9920
+    dw $9940
 
 ; Exact wording/order matches gbdk/src/app/ui.c's kMenuLabels[] -- the
 ; two implementations are meant to be indistinguishable from the screen,
@@ -4323,6 +4337,7 @@ MenuLabels:
     dw sMenuIspHttp
     dw sMenuP2pCaller
     dw sMenuP2pListener
+    dw sMenuServerConf
 
 MenuHandlers:
     dw RunAdapterSessionTest
@@ -4331,6 +4346,7 @@ MenuHandlers:
     dw RunIspHttpMenu
     dw RunP2pCaller
     dw RunP2pListener
+    dw RunAuthPrefixTest
 
 sMenuTitle1: db "MOBILE ADAPTER GB", 0
 
@@ -4362,6 +4378,11 @@ sMenuIspPassword:    db "ISP PASSWORD", 0
 sMenuIspHttp:        db "ISP/HTTP", 0
 sMenuP2pCaller:      db "P2P CALLER", 0
 sMenuP2pListener:    db "P2P LISTENER", 0
+; Server conformance, deliberately last and deliberately not inside
+; ISP/HTTP -- everything above tests the adapter; this tests the server
+; and can fail while the adapter is perfect. See big_buffer.asm's
+; BbRunAuthPrefix.
+sMenuServerConf:     db "SERVER CONF", 0
 
 sAdapterIdLabel: db "ADAPTER ID: ", 0
 sConfigChecksumOk:  db "CHECKSUM:OK", 0
