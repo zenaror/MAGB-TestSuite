@@ -663,88 +663,14 @@ SECTION "Big Buffer Code 2", ROMX, BANK[1]
 ; Input: DE = data, C = length (0..BB_UPLOAD_CHUNK)
 ; Output: A = result (0=OK)
 ; Clobbers: everything
-; Resets the bundled-response accumulator. Call before each request
-; whose body goes out through BbSendRaw/BbSendAll.
-; Clobbers: A
-BbSendBegin::
-    xor a, a
-    ld [wBbPendingLen], a
-    ld [wBbPendingLen + 1], a
-    ld [wBbPendingClosed], a
-    ret
-
-; This used to pass a zero-capacity output buffer, on the reasoning that
-; an HTTP/1.0 server does not reply mid-request. True of the reply's
-; TIMING, but not of its FRAMING: one Transfer Data both sends and
-; receives, so when the server answers quickly enough -- a 128-byte body
-; to a server on the same machine -- its whole response arrives bundled
-; with the very send that completed the request, and dropping it loses
-; the response. The poll that follows then finds only Transfer Data End.
-;
-; The GBDK ROM failed exactly that way on the SMALL BUFFER upload. This
-; side passed, but only because its response happened to land in a later
-; poll -- the bug was here too, waiting on timing. Keep what arrives.
 BbSendRaw:
     ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
     ld [wExecTimeoutFrames], a
     ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
     ld [wExecTimeoutFrames + 1], a
-
-    ; hl = wGb00RespBuf + pending, b = min(GB00_RESP_BUF_SIZE - pending, 255)
-    push bc
-    ld a, [wBbPendingLen]
-    ld e, a
-    ld a, [wBbPendingLen + 1]
-    ld d, a
-    ld hl, GB00_RESP_BUF_SIZE
-    ld a, l
-    sub a, e
-    ld l, a
-    ld a, h
-    sbc a, d
-    ld h, a
-    jr c, .noRoom
-    ld a, h
-    or a, a
-    jr z, .roomFits
-    ld a, 255
-    jr .haveCap
-.roomFits
-    ld a, l
-    jr .haveCap
-.noRoom
-    xor a, a
-.haveCap
-    pop bc
-    ld b, a
-    push bc
-    ld hl, wGb00RespBuf
-    add hl, de
-    pop bc
-
-    call MagbTransferData
-    or a, a
-    ret nz
-
-    ; pending += got; remember a close
-    ld a, [wXferGotLen]
-    ld e, a
-    ld d, 0
-    ld hl, wBbPendingLen
-    ld a, [hl]
-    add a, e
-    ld [hl+], a
-    ld a, [hl]
-    adc a, d
-    ld [hl], a
-    ld a, [wXferRemoteClosed]
-    or a, a
-    jr z, .notClosed
-    ld a, 1
-    ld [wBbPendingClosed], a
-.notClosed
-    xor a, a
-    ret
+    ld hl, wBbDiscard
+    ld b, 0 ; zero output capacity -- response deliberately dropped
+    jp MagbTransferData
 
 ; BbSendRaw for anything that can exceed one Transfer Data payload,
 ; splitting it across as many sends as it takes. See BB_REQ_BUF_SIZE's
@@ -796,10 +722,7 @@ BbSendAll:
 
 SECTION "Big Buffer Send Scratch", WRAMX, BANK[1]
 wBbChunkLen: db
-; Bytes the server sent back while we were still sending, accumulated
-; in wGb00RespBuf. See BbSendRaw.
-wBbPendingLen: dw
-wBbPendingClosed: db
+wBbDiscard:  ds 1
 
 SECTION "Big Buffer Code 3", ROMX, BANK[1]
 
@@ -1139,11 +1062,6 @@ BbAccumulateByte:
 ; Output: A = result (0=OK)
 ; Clobbers: everything
 BbStreamRequest::
-    push hl
-    push bc
-    call BbSendBegin
-    pop bc
-    pop hl
     xor a, a
     ld [wBbRemoteClosed], a
     ld [wBbHeadLen], a
@@ -1179,44 +1097,9 @@ BbStreamRequest::
 .singleSend
     ld e, l
     ld d, h
-    ; C already holds the (<= BB_UPLOAD_CHUNK) length.
-    ;
-    ; Receive AFTER whatever BbSendAll already accumulated -- it shares
-    ; wGb00RespBuf with us now (see BbSendRaw), so receiving at offset 0
-    ; would overwrite a reply that arrived during the earlier chunks.
-    push de
-    push bc
-    ld a, [wBbPendingLen]
-    ld e, a
-    ld a, [wBbPendingLen + 1]
-    ld d, a
-    ld hl, GB00_RESP_BUF_SIZE
-    ld a, l
-    sub a, e
-    ld l, a
-    ld a, h
-    sbc a, d
-    ld h, a
-    jr c, .noRoom
-    ld a, h
-    or a, a
-    jr z, .roomFits
-    ld a, 255
-    jr .haveCap
-.roomFits
-    ld a, l
-    jr .haveCap
-.noRoom
-    xor a, a
-.haveCap
-    ld c, a          ; cap
+    ; C already holds the (<= BB_UPLOAD_CHUNK) length
     ld hl, wGb00RespBuf
-    add hl, de       ; receive cursor
-    ld a, c
-    pop bc
-    ld b, a          ; B = cap, C = send length (restored)
-    pop de
-
+    ld b, 255
     ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
     ld [wExecTimeoutFrames], a
     ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
@@ -1225,25 +1108,12 @@ BbStreamRequest::
     or a, a
     jr nz, .sendFail
 
-    ; head_len = pending + got
     ld a, [wXferGotLen]
-    ld e, a
-    ld d, 0
-    ld a, [wBbPendingLen]
-    add a, e
     ld [wBbHeadLen], a
-    ld a, [wBbPendingLen + 1]
-    adc a, d
+    xor a, a
     ld [wBbHeadLen + 1], a
-
     ld a, [wXferRemoteClosed]
     ld [wBbRemoteClosed], a
-    ld a, [wBbPendingClosed]
-    or a, a
-    jr z, .notPreClosed
-    ld a, 1
-    ld [wBbRemoteClosed], a
-.notPreClosed
     jp BbStreamContinue
 
 .sendFail
@@ -1262,14 +1132,10 @@ BbStreamRequest::
 ; and stream the response.
 ; Output: A = result (0=OK)
 ; Clobbers: everything
-; Starts from whatever arrived bundled with the sends -- see
-; BbSendRaw. Zeroing here would throw the response away again.
 BbStreamRecv::
-    ld a, [wBbPendingLen]
+    xor a, a
     ld [wBbHeadLen], a
-    ld a, [wBbPendingLen + 1]
     ld [wBbHeadLen + 1], a
-    ld a, [wBbPendingClosed]
     ld [wBbRemoteClosed], a
     jp BbStreamContinue
 
@@ -1797,7 +1663,6 @@ BbRunTransfer::
 
     ; Upload request 3: the actual upload, identified by the Gb-Auth-ID
     ; the server just issued rather than by repeating the Authorization.
-    call BbSendBegin
     call BbBuildUpIdReq
     ld hl, wBbReqBuf
     ld a, [wBbReqLen]
@@ -2283,7 +2148,6 @@ BbRunSmallTransfer::
     or a, a
     jp nz, .tcpOpenFail
 
-    call BbSendBegin
     call BbBuildSmallPostReq
     ld hl, wBbReqBuf
     ld a, [wBbReqLen]
