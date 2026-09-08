@@ -1762,6 +1762,13 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
  * marked, for the result screen (the project owner has seen more than
  * one identical test message accumulate in the same mailbox across
  * repeated runs, so this can legitimately delete more than one). */
+/* How many TOP commands the last scan got a "+OK" for. Reported on the
+ * result screen when nothing was deleted, because "no test emails were
+ * found" and "the server refused every TOP" look identical otherwise --
+ * and they need opposite repairs. Deletion has never actually been
+ * observed working, so this is the datum that says where to look. */
+static uint8_t s_email_tops_ok;
+
 static uint8_t delete_matching_test_emails(magb_context_t *ctx, uint8_t conn_id,
                                             char *line, uint8_t line_cap,
                                             uint16_t msg_count, bool *remote_closed)
@@ -1770,6 +1777,7 @@ static uint8_t delete_matching_test_emails(magb_context_t *ctx, uint8_t conn_id,
     uint16_t scan_count = (msg_count > EMAIL_DELETE_MAX_SCAN) ? EMAIL_DELETE_MAX_SCAN : msg_count;
     uint8_t deleted = 0U;
 
+    s_email_tops_ok = 0U;
     for (msg = 1U; msg <= scan_count; msg++) {
         bool matched = false;
         uint8_t header_lines;
@@ -1782,6 +1790,7 @@ static uint8_t delete_matching_test_emails(magb_context_t *ctx, uint8_t conn_id,
             }
             continue; /* TOP unsupported/message missing -- skip, never guess */
         }
+        s_email_tops_ok++;
 
         for (header_lines = 0U; header_lines < 40U; header_lines++) {
             r = tcp_recv_line(ctx, conn_id, line, line_cap, remote_closed);
@@ -1939,6 +1948,12 @@ void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *pa
         out->result = MAGB_OK;
         if (deleted > 0U) {
             sprintf(out->detail[1], "MSGS %u DEL %u", msg_count, deleted);
+        } else if (msg_count > 0U) {
+            /* Nothing deleted, with mail present. TOP-count separates
+             * the two causes: 0 means the server refused every TOP
+             * (or has no such message), anything else means TOP worked
+             * and no message carried this test's Subject line. */
+            sprintf(out->detail[1], "MSGS %u TOP %hu", msg_count, s_email_tops_ok);
         } else {
             sprintf(out->detail[1], "MESSAGES: %u", msg_count);
         }
