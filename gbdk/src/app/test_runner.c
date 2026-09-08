@@ -1149,10 +1149,18 @@ void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *
      * at all: the full revalidation below the cache passes and the
      * request succeeds.)
      *
+     * There is a THIRD 401 -- bare, with neither header -- but it
+     * cannot reach this site. auth.php only enters the block above when
+     * `Gb-Auth-ID` is absent; a request carrying one skips to a session
+     * check that answers a headerless 401. This leg sends
+     * `Authorization` and never a `Gb-Auth-ID`, so only the two cases
+     * above are reachable here. BIG BUFFER's upload does send one, and
+     * handles that third case itself.
+     *
      * Only Gb-Status is tested, because its value is short enough to
      * read; WWW-Authenticate's is ~57 characters and would be refused
-     * as over-long by the token reader. Being mutually exclusive, one
-     * test settles both.
+     * as over-long by the token reader. With the third case out of
+     * reach here, one test settles both.
      *
      * This distinction became worth making only after REON fixed an
      * authentication bypass this test surfaced -- until then a
@@ -1260,6 +1268,15 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
     r = gb00_stream_request(ctx, conn_id, (const uint8_t *)s_bb_req, req_len, s_bb_status, &res, &fail_stage);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
 
+    /* A 401 with Gb-Status here means the credential was rejected, a
+     * different repair from "the server issued no session". */
+    if (strncmp(s_bb_status, "401", 3) == 0
+        && gb00_find_header_token(s_gb00_resp, res.head_len, "Gb-Status:",
+                                   s_bb_auth_id, sizeof(s_bb_auth_id))) {
+        bb_fail(ctx, out, MAGB_ERR_ISP, "AUTH REJECTED (201)", conn_id);
+        return;
+    }
+
     if (!gb00_find_header_token(s_gb00_resp, res.head_len, "Gb-Auth-ID:",
                                  s_bb_auth_id, sizeof(s_bb_auth_id))) {
         sprintf(out->detail[1], "AUTH STATUS %s", s_bb_status);
@@ -1326,6 +1343,26 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
     }
     (void)magb_tcp_close(ctx, conn_id);
     isp_http_cleanup(ctx, 0U, false, true);
+
+    /* This request carried `Gb-Auth-ID`, so a 401 here is NOT the
+     * challenge/credential kind: auth.php skips its authentication
+     * block entirely when that header is present, and instead validates
+     * the session it names -- answering a bare 401, with no `Gb-Status`
+     * and no `WWW-Authenticate`, when that session is dead. Reporting
+     * it as "UPLOAD MISMATCH" would point at a payload the server never
+     * read.
+     *
+     * `Gb-Status: 201` is still checked first: that would mean the
+     * credential itself was rejected, a different repair. */
+    if (strncmp(s_bb_status, "401", 3) == 0) {
+        if (gb00_find_header_token(s_gb00_resp, res.head_len, "Gb-Status:",
+                                    s_bb_auth_id, sizeof(s_bb_auth_id))) {
+            result_fail(out, MAGB_ERR_ISP, "AUTH REJECTED (201)");
+        } else {
+            result_fail(out, MAGB_ERR_ISP, "AUTH ID REJECTED");
+        }
+        return;
+    }
 
     if (res.body_len < 1U || res.first_body_byte != 0x01U) {
         /* The upload handler echoes the checksum it computed over what
