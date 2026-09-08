@@ -1423,14 +1423,17 @@ Two details worth knowing:
   sequence — a malformed header that a 2001-era parser has no way to
   defend against. If you implement this yourself, cut on characters.
 
-Whether the cap "affects Mobile Trainer" is still being confirmed
-between the project owner and the server side, and this document will
-not guess: the owner told me it does not, while the maintainer quotes
-the original requirement as saying Mobile Trainer *does* receive the
-shortened title. The likely explanation is that two different limits
-were being discussed — the ten-character **subject** cap here, and a
-separate twelve-characters-per-line wrap that Mobile Trainer applies to
-the message **body** on its own.
+**There are two different limits, and confusing them cost a round trip
+of questions.** Settled directly with the project owner:
+
+| limit | whose | applies to |
+|---|---|---|
+| 10 characters | REON's, in `pop3Connection.js` | the **subject**, on delivery to the game. Mobile Trainer does receive the shortened title. |
+| 12 characters per line | Mobile Trainer's own | how it wraps the message **body**. It handles this itself. |
+
+The cap stays — it is the owner's own requirement, not an accident. An
+earlier draft of this note said the truncation "does not affect Mobile
+Trainer"; that was about the body wrap, not the subject.
 
 ### Only some headers reach the game at all
 
@@ -1450,7 +1453,27 @@ survives, which is why getting the truncation right matters as much as
 it does.
 
 `DELE` is also a soft delete: messages get `deleted_at` set and move to a
-30-day trash rather than vanishing.
+30-day trash rather than vanishing. Worth knowing before writing a test
+that deletes: a matching rule that turns out too broad is recoverable.
+
+### Message numbers are positions, so the listing's order is protocol
+
+POP3 addresses messages by number — `TOP n`, `RETR n`, `DELE n` — and
+those numbers are just positions in the maildrop listing. RFC 1939
+requires them to stay fixed for the whole session, which is why `DELE`
+only *marks* and renumbering happens at `QUIT`.
+
+That makes the server's ordering a protocol-visible decision, and REON's
+query had no `ORDER BY`: the numbering was whatever order the optimizer's
+chosen index produced. It happened to give arrival order, so it looked
+correct. Had the planner switched to the `(recipient, read_at)` index,
+reading a message in the webmail could have renumbered the mailbox
+between one sync and the next — and a client that had just scanned
+headers would then delete a different message than the one it matched.
+
+Fixed upstream with an explicit arrival-order sort. Nothing about the
+observed behaviour changed; it stopped being luck. If you implement a
+POP3 server for a Game Boy client, order the listing explicitly.
 
 ### The general lesson
 
