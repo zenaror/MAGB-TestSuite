@@ -1196,46 +1196,37 @@ ROMs.
 
 ## Wire-format numbers are built explicitly, not with sprintf
 
-The SMALL BUFFER upload failed on hardware while the RGBDS one passed
-against the same server, which localised it to the GBDK ROM. The link
-logs put the finger on it precisely: the POST header goes out in two
-Transfer Data chunks of 253 + 11 bytes, and the RGBDS ROM's second chunk
-read `m: 1FC0\r\n\r\n` while the GBDK ROM's was nothing but CRLFs.
+**Correction, recorded rather than quietly edited: the reasoning that
+first justified this was wrong.**
 
-The GBDK request was **seven bytes shorter** — exactly the three digits
-of `128` and the four of `1fc0`. Both numeric conversions in
+The SMALL BUFFER POST went out seven bytes short, and the two numeric
+conversions in `sprintf(..., "Content-Length: %u ... X-Test-Checksum:
+%hx%hx ...")` happen to sum to exactly seven characters (`128` +
+`1fc0`). That coincidence was taken as proof that SDCC had dropped both
+conversions. It had not.
 
-```c
-sprintf(req, "...Content-Length: %u\r\nX-Test-Checksum: %hx%hx\r\n\r\n", ...)
-```
+The seven bytes were the `s_bb_auth_header` overflow described below.
+Intended content is 121 characters; the buffer was 112, so the tail
+spilled into `s_bb_auth_id`, and writing `X-Test-User` ("34") there put
+a NUL at index 114. `strlen` therefore returned 114 instead of 121 —
+**seven short**. Same number, entirely different cause.
 
-produced nothing. The server therefore saw `Content-Length:` with an
-empty value, forwarded no body to PHP, and answered with the checksum of
-an empty body (`0000`) — which looks exactly like a rejected upload
-rather than a malformed request. Nothing warned; the ROM built clean and
-the failure surfaced three layers away from its cause.
+`%u` and `%hx` work. The result screens prove it: `DL 8192 B OK` and
+`MESSAGES: n` both print their numbers.
 
-Both formats are documented as supported by GBDK's `stdio.h`, and both
-arguments were explicitly cast as its docs require. Chasing the precise
-quirk is beside the point: **a TestSuite whose job is putting exact
-bytes on a wire should not derive those bytes from a formatter it cannot
-test.** `magb_fmt.h`/`magb_fmt.c` are plain C with an explicit width,
-and `tests/host/test_fmt.c` checks them on the host — including the
-leading-zero cases (`0x0F00` must be `"0F00"`, never `"F00"`) that only
-bite for one checksum value in sixteen and would otherwise wait to be
-found by a confusing failure much later.
+The explicit formatters in `magb_fmt.h` were kept anyway, because the
+argument for them survives the correction being wrong:
 
-Applied to every wire string with a number in it, not just the one that
-broke: both buffer uploads' headers, and POP3's `TOP n 0` / `DELE n`.
-Those last two matter because a `TOP  0` with the number missing is a
-malformed command, and a server answering `-ERR` to it reads as "the
-mailbox is wrong" rather than "we sent nonsense" — the kind of wrong
-trail this file has followed before.
+- The wire format is now **tested** (`tests/host/test_fmt.c`), including
+  the zero-padding cases (`0x0F00` must render `"0F00"`, never `"F00"`)
+  that bite one checksum value in sixteen and would otherwise wait to
+  fail confusingly much later.
+- Both ROMs now emit uppercase hex, so they put identical bytes on the
+  wire. They had disagreed, and only REON's `strtoupper()` hid it.
 
-Side effect worth noting: the GBDK ROM now emits **uppercase** hex, like
-the RGBDS one always did. The two had disagreed, and only REON's
-`strtoupper()` on the client header hid it.
-
+But they were a precaution, not the fix, and the note that said
+otherwise would have sent the next reader hunting a compiler bug that
+does not exist.
 ## The last send of a body must also receive
 
 `test_isp_small_buffer()`'s upload failed with `NO HTTP/ PREFIX` for a
