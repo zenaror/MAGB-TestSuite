@@ -1662,7 +1662,12 @@ ever gains the ~60-80 bytes it needs. See
 `gbdk/docs/protocol-notes.md` for the verification that showed all three
 failure shapes answer an identical 401.
 
-**Not runtime-verified.** Both ROMs build clean and the logic mirrors
-the reproduction the REON maintainer ran by hand, but neither has
-executed this against the live server yet. It is the only test in either
-ROM in that state.
+**Runtime status.** GBDK ran it against the live server on 2026-09-08
+and passed with both halves confirmed — `GB-ST 201` on screen, and the
+server's prefix boolean reading *matches* for that same request (see
+`gbdk/docs/protocol-notes.md`). **This RGBDS port has not run it yet**,
+and that matters more than a usual port-lag: the two implementations
+compute the corruption offset independently (C indexes into the built
+header string, this one overwrites `wGb00Authorization` in place), so a
+divergence would show up precisely here. A PASS on screen would not
+reveal it — only the server's prefix boolean would.

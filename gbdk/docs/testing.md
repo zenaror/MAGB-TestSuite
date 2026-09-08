@@ -177,9 +177,11 @@ value from the same builder and needs a 200. See
 `docs/protocol-notes.md`, "The way this test could pass while proving
 nothing".
 
-**Not yet runtime-verified on either ROM.** It compiles clean and
-mirrors the reproduction the REON maintainer ran by hand, but neither
-build has executed it against the live server yet.
+**Runtime-verified on GBDK (2026-09-08), with both halves:** the ROM
+showed `PASS` / `GB-ST 201`, and the server log for that same request
+recorded the prefix boolean as *matches*. SMALL BUFFER passed a minute
+earlier in the same session, which is the contrapositive — same builder,
+undamaged value, `200`. RGBDS has not run it yet.
 
 ### Read Configuration
 
