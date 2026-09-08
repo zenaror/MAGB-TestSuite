@@ -30,16 +30,22 @@ typedef enum {
  */
 #define SERIAL_HW_BYTE_TIMEOUT 60000U
 
-/** Must be called once at startup.
+/** Must be called once at startup, before any other function here.
  *
  * Verifies the console is a CGB (this TestSuite is CGB-only per
  * project requirements) and switches the CPU to double speed via
- * cpu_fast(). Never returns if the console is not a CGB -- it shows
- * a fatal platform error screen instead, because silently falling
- * back to DMG timings would produce a serial clock the real Mobile
- * Adapter GB / libmobile does not expect.
+ * cpu_fast().
+ *
+ * Returns false, having changed nothing, if the console is not a CGB.
+ * A caller that ignores that and talks to the adapter anyway will
+ * produce a serial clock the real Mobile Adapter GB / libmobile does
+ * not expect, so treat false as fatal -- this TestSuite shows a
+ * platform-error screen and halts (ui_fatal_not_cgb(), called from
+ * main()). Deciding what to *show* is the application's job, not this
+ * layer's: a hardware module that draws its own error screen cannot be
+ * lifted into a program with a different display, or with none.
  */
-void serial_hw_init(void);
+bool serial_hw_init(void);
 
 /** Transfers one byte in each direction over SB/SC.
  *

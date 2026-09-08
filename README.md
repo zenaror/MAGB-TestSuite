@@ -32,12 +32,21 @@ simple text menu on the Game Boy screen:
    POP, ISP dial string).
 3. **ISP / HTTP** — a real ISP dial-up session (Dial → ISP Login → DNS
    → TCP → data transfer → teardown) driving seven targets: an HTTP
-   fetch against REON's real "Mystery Egg" test data, GB00-authenticated
-   news config/article fetches, Mobile Trainer's home page, SMTP send,
-   POP3 receive, and an interactive raw-TCP ("netcat") viewer.
-4. **P2P Caller / Listener (only GBDK, for now)** — two roles of the same test,
-   run as two ROM instances dialing each other directly and exchanging a
+   fetch against REON's real "Mystery Egg" test data; **Small Buffer**
+   and **Big Buffer**, a GB00-authenticated pair carrying synthetic
+   data of 128 bytes and 8 KiB — one arriving in a single Transfer
+   Data, the other streamed and checksummed chunk by chunk, then
+   uploaded back; Mobile Trainer's home page; SMTP send; POP3 receive
+   (which deletes only the messages it sent itself); and an interactive
+   raw-TCP ("netcat") viewer.
+4. **P2P Caller / Listener** — two roles of the same test, run as two
+   ROM instances dialing each other directly and exchanging a
    deterministic binary payload.
+
+The ISP account password is entered on-device and kept in
+battery-backed cartridge SRAM, so it survives a power cycle. It is
+never compiled in: a test that needs authentication refuses to run
+while it is unset rather than sending a guess.
 
 Every test reports `PASS`/`FAIL` plus a specific diagnostic (which
 command, which stage, which error code) — never a fake success. See
@@ -62,8 +71,16 @@ facts rather than a bug in either one:
   TestSuite reports exactly which stage of the chain failed rather than
   shortcutting.
 
-Implementation-specific gaps (e.g. what's not yet confirmed on real
-hardware for `rgbds/`) are listed in that implementation's own README.
+- P2P Caller/Listener works end-to-end on `gbdk/` against real
+  hardware (PicoAdapterGB), which is also how a real disconnect-detection
+  bug in `libmobile` was found and fixed — see
+  [`gbdk/docs/journal.md`](gbdk/docs/journal.md). The `rgbds/` port of
+  the same test is implemented but has not had its own two-instance run
+  yet; that needs two linked setups at once, which is the only reason
+  it is still open.
+
+Implementation-specific gaps are listed in that implementation's own
+README.
 
 ## Why GBC-only
 
@@ -83,8 +100,19 @@ TestSuite, each self-contained in its own top-level directory:
 
 | Directory | Language / toolchain | Status |
 | --- | --- | --- |
-| [`gbdk/`](gbdk/) | C, GBDK-2020/SDCC | **Current, working implementation.** Full test coverage, confirmed on real hardware. |
-| [`rgbds/`](rgbds/) | Hand-written SM83 assembly, RGBDS | In progress — feature set now close to `gbdk/`'s; see [`rgbds/docs/status.md`](rgbds/docs/status.md) for exactly what's confirmed. |
+| [`gbdk/`](gbdk/) | C, GBDK-2020/SDCC | Full test coverage, every test confirmed against a real server. |
+| [`rgbds/`](rgbds/) | Hand-written SM83 assembly, RGBDS | Same feature set, same tests, same results — see [`rgbds/docs/status.md`](rgbds/docs/status.md) for the per-routine detail. |
+
+Neither is a subset of the other. They are kept behaviourally
+identical on purpose: two independent implementations disagreeing about
+the wire format is the cheapest way to find out that one of them is
+wrong.
+
+Want to use the protocol code in your own homebrew rather than run the
+diagnostic ROM? Each side has an integration guide —
+[`gbdk/docs/integration-guide.md`](gbdk/docs/integration-guide.md)
+(start here even for assembly; the protocol reasoning lives there) and
+[`rgbds/docs/integration-guide.md`](rgbds/docs/integration-guide.md).
 
 Each implementation is independently self-contained: its own build,
 its own tests, its own docs. [`CLAUDE.md`](CLAUDE.md) at the repo root

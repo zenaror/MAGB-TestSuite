@@ -61,20 +61,32 @@ Three strict layers (see the repo root [`CLAUDE.md`](../CLAUDE.md) for
 the full rationale):
 
 ```text
-src/hw/serial_hw.c          Layer 1: SB/SC only, no protocol knowledge
+src/hw/serial_hw.c          Layer 1: SB/SC only -- no protocol, no screen
 src/protocol/magb_packet.c  Layer 2: checksum, framing, streaming parser (hardware-free, host-testable)
 src/protocol/magb_session.c Layer 2: the ACK/idle-byte handshake, Begin/End Session, trace ring buffer
 src/protocol/magb_network.c Layer 2: command wrappers (phone/dial/ISP/DNS/TCP/transfer/config)
+src/protocol/magb_config.c  Layer 2: config-blob decoding (BCD phone, checksum) -- host-testable
+src/protocol/magb_fmt.c     Layer 2: exact decimal/hex for wire strings -- host-testable
+src/app/gb00_auth.c         Layer 3: MD5 + base64 + REON's GB00 auth (banked; not MAGB protocol)
 src/app/test_runner.c       Layer 3: test sequencing, MATS P2P payload framing
-src/app/ui.c                Layer 3: menu, joypad, result/trace/config screens
+src/app/save.c              Layer 3: battery-backed SRAM record (ISP password)
+src/app/ui.c                Layer 3: menu, joypad, result/trace/config screens, palette bring-up
+src/app/sound.c             Layer 3: result beeps
 src/main.c                  entry point
 ```
 
+The layering is enforced, not aspirational: `src/hw/` includes nothing
+about screens, and no file under `src/protocol/` includes
+`test_config.h`. `make check-banking` additionally verifies the MBC5
+banking invariants mechanically (trampoline placement, `BANKED`
+consistency, and a ROM scan for direct `CALL`s into banked code).
+
 Want to use this protocol code in your own homebrew, not just run this
 diagnostic ROM? [`docs/integration-guide.md`](docs/integration-guide.md)
-covers exactly what to copy (the hardware/protocol layers, not the app
-layer) and gives worked recipes for a session, an ISP/HTTP fetch, and a
-P2P link.
+says exactly which files to copy in which tiers, and gives worked
+recipes for a session, an ISP/HTTP fetch, a streamed body, and a P2P
+link — plus the mistakes this project already made, so you don't have
+to.
 
 ## License
 

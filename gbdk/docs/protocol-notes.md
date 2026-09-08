@@ -38,8 +38,9 @@ TestSuite always transmits `0x83` (see `serial_transfer_byte()` in
 
 `serial_hw_init()` checks `_cpu == CGB_TYPE` (GBDK's own constant, from
 `include/gb/cgb.h`) before doing anything else, and calls `cpu_fast()`
-unconditionally afterward. If the console is not a CGB, the ROM prints
-a fatal message and halts forever (`fatal_not_cgb()`) rather than
+only once that passes. On anything else it changes nothing and returns
+`false`; `main()` then shows a fatal message and halts forever
+(`ui_fatal_not_cgb()`) rather than
 continuing in DMG speed — mixing DMG CPU speed with the `SIOF_SPEED_32X`
 serial bit does not correspond to any real Mobile Adapter GB
 configuration, and the project brief explicitly requires refusing to
@@ -135,10 +136,17 @@ VBlank ISR trampoline at `0x0040`-`0x0047`, not crashed) but rendered
 using an undefined palette that showed as a blank white screen on both
 BGB and a real Everdrive GB X7 — identical symptom on both, since it is
 a software bug, not an emulation or flash-cart quirk. Fixed by calling
-GBDK's `set_default_palette()` (`gb/cgb.h`) in `serial_hw_init()`
-immediately after `cpu_fast()`, once `_cpu == CGB_TYPE` is confirmed
-(its own documented precondition) — it sets CGB palette 0 to the same
-white/light-gray/dark-gray/black scheme DMG uses by default.
+GBDK's `set_default_palette()` (`gb/cgb.h`) — it sets CGB palette 0 to
+the same white/light-gray/dark-gray/black scheme DMG uses by default.
+
+The call lives in `ui_init()`, the app layer's display bring-up. It
+was originally inside `serial_hw_init()`, which is how a serial-port
+module came to depend on `<gbdk/console.h>` and `<stdio.h>`: a palette
+call, then a fatal-error screen to go with it. Both moved out (the
+screen is `ui_fatal_not_cgb()` now). Nothing about the fix changed —
+only which layer owns it, so `src/hw/serial_hw.c` can be lifted into a
+program that draws its own screens, or none. See
+`docs/integration-guide.md`.
 
 ## Timeout strategy (Section 7)
 

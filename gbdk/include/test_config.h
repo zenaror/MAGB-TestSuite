@@ -13,9 +13,9 @@
 #define TEST_CONFIG_H
 
 /* ISP dial string and login ID -- FALLBACK DEFAULTS ONLY. Every
- * ISP-touching test (test_isp_http(), test_isp_news_article(),
- * test_isp_email_send/recv() in test_runner.c, via the shared
- * read_isp_identity() helper) reads the real dial string
+ * ISP-touching test (test_isp_http(), test_isp_small_buffer(),
+ * test_isp_big_buffer(), test_isp_email_send/recv() in test_runner.c,
+ * via the shared read_isp_identity() helper) reads the real dial string
  * (Configuration Slot 1, BCD-decoded) and login ID
  * (MAGB_CONFIG_OFF_LOGIN_ID) live from the adapter's own Read
  * Configuration Data (0x19) response, exactly like the email tests
@@ -49,8 +49,9 @@
  * configuration layout (it is only ever kept in a game's own save
  * data), so it can never be read from Read Config either -- it has to
  * come from the user, via the "ISP PASSWORD" menu entry
- * (ui_edit_text() in main.c, kept only in RAM; this ROM has no
- * mapper/save). An earlier version of this file *did* define
+ * (ui_edit_text() in main.c). It is persisted to battery-backed cart
+ * SRAM and restored at boot (see save.h) -- persisted, but still never
+ * defaulted. An earlier version of this file *did* define
  * TEST_ISP_PASSWORD "test" as a default, which silently masked a real
  * server-side 401/-ERR behind a misleading symptom for a full day of
  * debugging (see docs/protocol-notes.md's GB00 section) -- removed for
@@ -141,14 +142,16 @@
  * NOT a Pokémon Crystal clone and must not contain Pokémon-specific
  * game code"). Added specifically to exercise a body (TEST_BIGBUFFER_
  * SIZE bytes) far larger than any single Transfer Data (0x15)
- * response and any buffer this mapperless, no-SRAM ROM could hold at
- * once -- see gb00_stream_request()/test_isp_big_buffer() in
+ * response and than any buffer this ROM could hold at once (8 KiB is
+ * the Game Boy's entire work RAM) -- see
+ * gb00_stream_request()/test_isp_big_buffer() in
  * test_runner.c for how that's verified (a running 16-bit additive
  * checksum computed while streaming, never buffered in full). Same
- * GB00 challenge/response auth (REON's doAuth()) and host as News/
- * Tamago above, relayed cross-session while implementing this test,
- * not independently confirmed against REON's PHP source the way the
- * paths above were. */
+ * host as Tamago above; the paths were relayed cross-session while
+ * implementing this test rather than read out of REON's PHP source the
+ * way the paths above were -- but both legs have since been confirmed
+ * end to end against the real server, with the fixtures checked in
+ * under the repo's server/ directory. */
 #define TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH "/cgb/download?name=/01/MAGBTEST/0.bigbuffer.cgb"
 #define TEST_HTTP_BIGBUFFER_UPLOAD_PATH   "/cgb/upload?name=/01/MAGBTEST/0.bigbuffer.cgb"
 #define TEST_BIGBUFFER_SIZE 8192U
