@@ -1583,9 +1583,8 @@ The cartridge save was confirmed across a real power cycle on the same
 day, on both ROMs. The one thing with no pass/fail of its own is RAW
 TCP, which is an interactive viewer rather than a scripted test.
 
-Added after that table and **not covered by it**: SERVER CONF /
-AUTH PREFIX, which has not been run against the live server on either
-ROM yet -- see "Server conformance" below.
+Added after that table, and since verified on both ROMs the same day:
+SERVER CONF / AUTH PREFIX -- see "Server conformance" below.
 
 Worth remembering about EMAIL RECV: it deletes **only** messages
 carrying its own subject, and reads headers with `TOP n 0` rather than
@@ -1662,12 +1661,14 @@ ever gains the ~60-80 bytes it needs. See
 `gbdk/docs/protocol-notes.md` for the verification that showed all three
 failure shapes answer an identical 401.
 
-**Runtime status.** GBDK ran it against the live server on 2026-09-08
-and passed with both halves confirmed — `GB-ST 201` on screen, and the
-server's prefix boolean reading *matches* for that same request (see
-`gbdk/docs/protocol-notes.md`). **This RGBDS port has not run it yet**,
-and that matters more than a usual port-lag: the two implementations
-compute the corruption offset independently (C indexes into the built
-header string, this one overwrites `wGb00Authorization` in place), so a
-divergence would show up precisely here. A PASS on screen would not
-reveal it — only the server's prefix boolean would.
+**Runtime-verified, 2026-09-08 (15:00:59-15:01:00).** `GB-ST 201` on
+screen, and the server's prefix boolean reading *matches* for that same
+request — both halves. GBDK passed identically two minutes earlier.
+
+That agreement is the useful part, not the PASS. The two implementations
+compute the corruption offset independently — C indexes into the built
+header string, this one overwrites `wGb00Authorization` in place — so a
+divergence would have shown up precisely here, and a PASS on screen
+would not have revealed it. Both logged *matches*, so both got the
+offset right. See `gbdk/docs/protocol-notes.md` for the full log and for
+why the forged tail reads as almost all `A`.

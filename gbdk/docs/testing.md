@@ -177,11 +177,11 @@ value from the same builder and needs a 200. See
 `docs/protocol-notes.md`, "The way this test could pass while proving
 nothing".
 
-**Runtime-verified on GBDK (2026-09-08), with both halves:** the ROM
-showed `PASS` / `GB-ST 201`, and the server log for that same request
-recorded the prefix boolean as *matches*. SMALL BUFFER passed a minute
-earlier in the same session, which is the contrapositive — same builder,
-undamaged value, `200`. RGBDS has not run it yet.
+**Runtime-verified on both ROMs (2026-09-08), with both halves:** each
+showed `PASS` / `GB-ST 201`, and the server log for each of those
+requests recorded the prefix boolean as *matches*. SMALL BUFFER passed a
+minute earlier in each session, which is the contrapositive — same
+builder, undamaged value, `200`.
 
 ### Read Configuration
 
