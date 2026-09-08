@@ -1644,6 +1644,18 @@ upload leg.
 
 Space after adding it: ROM0 4001 free, ROMX 8515 free. Still 32 KiB.
 
+**How this test could pass while proving nothing.** It is only
+meaningful if the 44-character prefix is correct and only the tail is
+wrong. A miscomputed offset that spilled into the prefix would still be
+rejected — damaged prefix misses the cache, full validation runs, same
+`401 + Gb-Status` — and the test would report PASS without ever
+exercising the case the fix is about. The prefix is correct by
+construction here (`Gb00BuildAuthorization` builds the whole value from
+the real challenge, then bytes 44..91 are overwritten in place), and
+SMALL BUFFER's own PASS covers it indirectly by sending the undamaged
+value from the same builder. Neither is an independent check inside this
+test. See `gbdk/docs/protocol-notes.md` for the two ways to close it.
+
 **Not runtime-verified.** Both ROMs build clean and the logic mirrors
 the reproduction the REON maintainer ran by hand, but neither has
 executed this against the live server yet. It is the only test in either

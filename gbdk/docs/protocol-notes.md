@@ -1380,6 +1380,44 @@ Not yet runtime-verified — it compiles clean on both ROMs and its logic
 mirrors the reproduction the REON maintainer ran by hand, but neither
 ROM has executed it against the live server yet.
 
+#### The way this test could pass while proving nothing
+
+Worth stating plainly, because it is not obvious and it is the only
+thing that would make a PASS worthless.
+
+The test is only meaningful if the 44-character prefix it sends is
+**correct** and only the tail is wrong. If an offset were miscomputed
+and the corruption spilled into the prefix, the server would reject the
+request anyway — the damaged prefix misses the cache, full validation
+runs, and the answer is the same `401 + Gb-Status: 201`. **The test
+would report PASS without ever exercising the case the fix is about.**
+
+Today the prefix is correct by construction (both ROMs build the whole
+value with the real challenge, then overwrite from
+`GB00_AUTH_PREFIX_LEN` onward) and, indirectly, by SMALL BUFFER passing
+in the same period — SMALL BUFFER sends the *undamaged* value from the
+same builder and gets a 200, which is what says the builder and the
+offsets are right. Neither is an independent check inside this test.
+
+Two ways to close it, neither done yet:
+
+1. **Server-side, one line.** REON logs the last 12 characters of an
+   `Authorization` deliberately, so the prefix never reaches the log;
+   the maintainer offered to log instead a boolean — does the
+   44-character prefix match the challenge this session issued — which
+   proves the missing half without recording any credential. Asked for;
+   pending on their side.
+2. **Client-side, one extra request.** Send the valid Authorization
+   first and require 200, then the damaged one and require 401, in the
+   same session. That is self-proving with no server help, and it is
+   what the test should eventually do. It costs one more request and
+   about 60-80 bytes the GBDK build does not currently have (see the
+   Makefile: 23 bytes free below `0x8000`).
+
+Until one of those exists, read a PASS as "this server rejected a
+credential whose tail was wrong", and rely on SMALL BUFFER's own PASS
+for "and the prefix was right".
+
 ### The three kinds of 401
 
 They are not ambiguous on the wire, but there are **three**, not two —
@@ -1573,3 +1611,16 @@ could also starve behind a freshly started relay number-fetch, since
 both share one socket buffer (libmobile `935aec7`, mutual-exclusion
 gating in `mobile_actions_get()`). Same subsystem, different failure —
 don't assume one fix covers the other.
+
+A third, found server-side once the first was repaired (REON
+`dd65168`): a `deauthorize` arriving with the **same** counter as the
+last `authorize` was swallowed as an idempotent replay — 200 returned,
+device left authorized. Revocation failing silently. Now a revocation is
+honoured at an equal counter, while `authorize` still requires a
+strictly greater one.
+
+Three bugs in one subsystem, each exposed by fixing the one before it,
+is itself the note worth keeping: anti-replay rules that treat every
+message the same way get the asymmetry wrong. Granting access and
+withdrawing it do not deserve equal suspicion — the failure modes are
+not symmetric, and the safe default for a revocation is to honour it.
