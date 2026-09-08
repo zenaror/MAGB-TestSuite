@@ -2,12 +2,13 @@
 
 A from-scratch, hand-written **SM83 assembly** implementation of the
 Mobile Adapter GB TestSuite, built with [RGBDS](https://rgbds.gbdev.io/),
-living alongside the working [`gbdk/`](../gbdk/) C implementation. See
-the repo root [`README.md`](../README.md) for what the TestSuite is and
-what it tests in general, and
-[`docs/status.md`](docs/status.md) in this directory for the
-exhaustive, up-to-date list of what's implemented and confirmed working
-so far.
+a full peer of the [`gbdk/`](../gbdk/) C implementation — the same test
+set, the same results, every test runtime-verified. Neither is the
+"real" one and the other a port. See the repo root
+[`README.md`](../README.md) for what the TestSuite is and what it tests
+in general, and [`docs/status.md`](docs/status.md) in this directory for
+the exhaustive, per-routine list of what's implemented and how each was
+verified.
 
 ## Prerequisites
 
