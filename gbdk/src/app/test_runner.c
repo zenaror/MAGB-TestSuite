@@ -1133,23 +1133,39 @@ void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *
     (void)magb_tcp_close(ctx, conn_id);
     isp_http_cleanup(ctx, 0U, false, true);
 
-    /* A 401 here now has TWO possible meanings, and the second one is
-     * new. It used to mean only "the utility-auth window did not hold",
-     * because REON's cache short-circuited on the first 44 characters
-     * of the Authorization and returned the cached user without looking
-     * at the rest -- a corrupted credential still got a 200. That was
-     * an authentication bypass, found through this test and fixed
-     * upstream (see docs/protocol-notes.md). The cache now compares a
-     * hash of the whole value.
+    /* A 401 here is not one outcome but two, and REON's own source
+     * makes them mutually exclusive -- both branches call
+     * header_remove() first, so exactly one of these headers is
+     * present:
      *
-     * So a 401 here means either the window expired OR the
-     * Authorization we sent was wrong -- which is a real gain: the
-     * server's answer can now detect client-side credential corruption,
-     * which is exactly what it could not do when a truncated header
-     * sailed through as authenticated. Still worth naming separately
-     * from a checksum disagreement. */
+     *   Gb-Status: 201        the challenge existed and the credential
+     *                         did NOT match. This is the verdict.
+     *   WWW-Authenticate:     the challenge session is gone (expired or
+     *                         collected). Not a verdict on the
+     *                         credential at all -- it is a fresh
+     *                         challenge inviting a new handshake.
+     *
+     * (A window that expired with an intact Authorization does not 401
+     * at all: the full revalidation below the cache passes and the
+     * request succeeds.)
+     *
+     * Only Gb-Status is tested, because its value is short enough to
+     * read; WWW-Authenticate's is ~57 characters and would be refused
+     * as over-long by the token reader. Being mutually exclusive, one
+     * test settles both.
+     *
+     * This distinction became worth making only after REON fixed an
+     * authentication bypass this test surfaced -- until then a
+     * corrupted credential returned 200, so "the credential was wrong"
+     * was not an outcome the server could report. See
+     * docs/protocol-notes.md. */
     if (strncmp(s_bb_status, "401", 3) == 0) {
-        result_fail(out, MAGB_ERR_ISP, "AUTH REUSE REJECTED");
+        if (gb00_find_header_token(s_gb00_resp, res.head_len, "Gb-Status:",
+                                    s_bb_auth_id, sizeof(s_bb_auth_id))) {
+            result_fail(out, MAGB_ERR_ISP, "AUTH REJECTED (201)");
+        } else {
+            result_fail(out, MAGB_ERR_ISP, "CHALLENGE EXPIRED");
+        }
         return;
     }
 
