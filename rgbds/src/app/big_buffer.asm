@@ -1656,6 +1656,17 @@ BbRunTransfer::
     or a, a
     jp nz, .closeAndReturn
 
+    ; A 401 with Gb-Status here means the credential was rejected, a
+    ; different repair from "the server issued no session".
+    call BbStatusIs401
+    jp nz, .checkAuthId
+    call BbFindGbStatus
+    or a, a
+    jp z, .checkAuthId
+    call MagbTcpClose
+    ld hl, sBbAuthRejected
+    jp .storeIspFail
+.checkAuthId
     call BbFindAuthId
     or a, a
     jr nz, .haveAuthId
@@ -1696,6 +1707,23 @@ BbRunTransfer::
     jp nz, .closeAndReturn
     call MagbTcpClose
 
+    ; This request carried Gb-Auth-ID, so a 401 here is NOT the
+    ; challenge/credential kind: auth.php skips its authentication block
+    ; entirely when that header is present, and instead validates the
+    ; session it names -- answering a BARE 401, with no Gb-Status and no
+    ; WWW-Authenticate, when that session is dead. Calling that
+    ; "UPLOAD MISMATCH" would point at a payload the server never read.
+    ;
+    ; Gb-Status: 201 is still checked first: that would mean the
+    ; credential itself was rejected, a different repair.
+    call BbStatusIs401
+    jp nz, .haveVerdict
+    call BbFindGbStatus
+    or a, a
+    jp nz, .authRejected
+    jp .authIdRejected
+.haveVerdict
+
     ; The server reports its own verdict in the first body byte.
     ld a, [wBbBodyLen]
     ld hl, wBbBodyLen + 1
@@ -1712,6 +1740,15 @@ BbRunTransfer::
 .uploadMismatch
     call BbBuildUploadByteDetail
     ld hl, sBbUploadMismatch
+    jr .storeIspFail
+
+.authRejected
+    ld hl, sBbAuthRejected
+    jr .storeIspFail
+
+.authIdRejected
+    ld hl, sBbAuthIdRejected
+.storeIspFail
     ld a, l
     ld [wBbFailMsgPtr], a
     ld a, h
@@ -2320,6 +2357,7 @@ sBbNoChallenge:        db "NO CHALLENGE", 0
 sBbNotAuthed:          db "NOT AUTHENTICATED", 0
 sBbAuthRejected:       db "AUTH REJECTED (201)", 0
 sBbChallengeExpired:   db "CHALLENGE EXPIRED", 0
+sBbAuthIdRejected:     db "AUTH ID REJECTED", 0
 sBbShortBody:          db "SHORT BODY", 0
 
 sBbGotPrefix: db "GOT "

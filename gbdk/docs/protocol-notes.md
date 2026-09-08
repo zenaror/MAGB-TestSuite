@@ -1325,21 +1325,42 @@ ambiguity: the server's answer can finally detect client-side credential
 corruption, which is precisely what it could not do while a truncated
 header authenticated successfully.
 
-And the two are not actually ambiguous on the wire. Both branches in
-`auth.php` call `header_remove()` before answering, so exactly one of
-these is present:
+### The three kinds of 401
+
+They are not ambiguous on the wire, but there are **three**, not two —
+and the third is easy to miss because it lives outside `doAuth`'s
+authentication block:
 
 | response | meaning |
 |---|---|
 | `401` + `Gb-Status: 201` | the challenge existed and the credential did **not** match — the verdict |
 | `401` + `WWW-Authenticate:` | the challenge session is gone; not a verdict at all, but a fresh challenge inviting a new handshake |
+| `401` + **neither header** | the request carried a `Gb-Auth-ID` and the session it names is dead |
 | `200` | the window expired but the Authorization was intact — full revalidation passed and the request simply succeeded |
 
-Both ROMs branch on this and report `AUTH REJECTED (201)` or
-`CHALLENGE EXPIRED` rather than one vague message. Only `Gb-Status` is
-tested: its value is short enough to read, while `WWW-Authenticate`'s is
-~57 characters and the token reader refuses an over-long value — and
-since the two are mutually exclusive, one test settles both.
+The third comes from the `Gb-Auth-ID` validation that runs *after* the
+authentication block: `header_remove(); http_response_code(401);
+exit();`. It is reachable only on a request that carries that header —
+`doAuth` enters its authentication block **only when `Gb-Auth-ID` is
+absent** — which makes the disambiguation free:
+
+| what the ROM sent | `401` without `Gb-Status` means |
+|---|---|
+| `Authorization` | the challenge expired; redo the handshake |
+| `Gb-Auth-ID` | that session died; the credential and challenge are not implicated |
+
+So the ROM's own request state settles it, and only `Gb-Status` ever
+needs reading — which matters, because `WWW-Authenticate`'s value is ~57
+characters and both ROMs' token readers *refuse* an over-long value
+rather than truncating it. Branching on that header would have
+misclassified every time.
+
+Both ROMs report `AUTH REJECTED (201)`, `CHALLENGE EXPIRED` (the
+`Authorization` legs) or `AUTH ID REJECTED` (the upload's third
+request). The last one matters most: without it a dead session on the
+upload reads as `UPLOAD MISMATCH`, pointing at a payload the server
+never read — and that is exactly the request where this project's own
+bug lived.
 
 A negative test — deliberately send a prefix-only Authorization and
 require a 401 — would pin this as a regression test for any
