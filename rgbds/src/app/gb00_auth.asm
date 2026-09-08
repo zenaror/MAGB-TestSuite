@@ -16,11 +16,14 @@
 ; ("GB00 HTTP authentication") for the full derivation. Not re-derived
 ; independently here; this is a faithful port of already-verified logic.
 ;
-; The actual code (not the WRAM state) lives in ROMX BANK[1], not ROM0
-; -- this is a mapperless 32KB cart (cartridge type $00, rgbfix -m 0x00),
-; so "BANK[1]" here just means the ROM's fixed upper 16KB ($4000-$7FFF),
-; always mapped, never bank-switched (there's no MBC to switch it, and
-; nothing here ever needs to). This was worth doing at all because
+; The actual code (not the WRAM state) lives in ROMX BANK[1], not ROM0.
+; This cart is MBC5 now (type $1B, rgbfix -m 0x1B) -- but the mapper is
+; there for the battery, not for space: the build is still 32KB, bank 1
+; is the only ROMX bank, and it is the bank MBC5 maps at $4000-$7FFF out
+; of reset. Nothing in this ROM ever writes a bank number, so "BANK[1]"
+; still just means the ROM's upper 16KB, always mapped. Anything that
+; ever adds a second ROMX bank has to revisit that. This was worth doing
+; at all because
 ; every other file in this ROM declares its code as plain ROM0, which
 ; RGBDS packs into the lower 16KB ($0000-$3FFF) only -- before this,
 ; the entire upper half of the physical ROM sat unused (all $FF

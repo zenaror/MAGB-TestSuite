@@ -30,6 +30,12 @@ covers:
 All of these must pass before touching anything downstream of the
 packet layer. They're fast enough to run after every protocol change.
 
+`make test` also builds and runs `tests/host/test_fmt.c` +
+`src/protocol/magb_fmt.c` (the explicit decimal/hex formatters used to
+build wire strings), which covers the zero-padding cases a `"%x"` gets
+wrong -- a checksum of `0x0F00` must go out as `"0F00"`, and that only
+shows up for one value in sixteen.
+
 `make test` also builds and runs `tests/host/test_config.c` +
 `src/protocol/magb_config.c` (the configuration-blob parser --
 checksum validation, Configuration Slot BCD phone decode). Most of its
@@ -51,8 +57,13 @@ message rather than failing; the synthetic checks (and all of
 
 ## Manual tests against BGB + libmobile-bgb + libmobile
 
-This is the primary target environment and the one to use for Tests 1
-and 2.
+Everything below also applies to a real Game Boy Color with real
+adapter hardware (a PicoAdapterGB, which is what most of this
+project's later runtime verification actually used) — from the ROM's
+side nothing differs, since it speaks ordinary MAGB traffic and takes
+no emulator-specific shortcut. BGB is the easier environment to start
+in, because it gives you a serial log to compare against the ROM's own
+trace viewer.
 
 1. Build the ROM (`make GBDK_HOME=/path/to/gbdk-2020/gbdk`, see the
    README for details) — `build/mobile_adapter_testsuite_gbdk.gbc`.
@@ -83,6 +94,44 @@ and 2.
    HTTP path works; only a `NO HTTP/ PREFIX` or an earlier-stage
    failure (`DIAL ISP FAILED`, `DNS QUERY FAILED`, ...) indicates an
    actual break in the chain, and the detail line says which stage.
+
+### The tests that authenticate
+
+**Tamago Egg**, **Trainer Home** and **Raw TCP** need no credentials.
+Everything else does:
+
+| test | needs |
+| --- | --- |
+| Small Buffer | ISP password + the `server/` fixture, REON `doAuth(2)` |
+| Big Buffer | ISP password + the `server/` fixture, REON `doAuth(1)` + type-0 upload |
+| Email Send / Email Recv | ISP password, a real SMTP/POP3 account |
+
+Set it from the main menu's **ISP PASSWORD** entry before running any
+of them. It starts **empty on a fresh cartridge and stays empty until
+you type it** — there is no compiled-in default, and a test that needs
+one fails with `SET ISP PASSWORD` rather than sending a guess. (An
+earlier build did default it to `"test"`, and that masked a real
+server-side 401 behind a misleading symptom for a full day.)
+
+Once entered it is written to battery-backed cartridge SRAM and
+restored at the next boot, so this is a once-per-cartridge step, not a
+once-per-session one. **That means the `.sav` next to your ROM contains
+a real account password in plain text** — the repo's `.gitignore`
+excludes the whole `emulador/` directory for this reason. Don't commit
+it and don't attach it to a bug report.
+
+The two buffer tests also need REON to be serving the synthetic
+MAGBTEST endpoints. They are checked in under [`server/`](../../server/)
+precisely so the tests are reproducible on any REON host rather than on
+one particular person's — see [`server/README.md`](../../server/README.md)
+for installation, including the one change `download.php` needs.
+
+**Email Recv deletes only its own messages.** It reads headers with
+`TOP n 0` and issues `DELE` only for subjects matching its own, unlike
+the real Mobile Trainer, which `RETR`s what it downloads and deletes
+all of it. This runs against a real mailbox; a test that removed
+everything it found would delete real mail. `DELE` only marks — the
+`QUIT` commits — so a failure partway through leaves the mailbox alone.
 
 ### Read Configuration
 

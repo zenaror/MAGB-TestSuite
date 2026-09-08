@@ -1261,15 +1261,15 @@ SECTION "Session Code 10", ROM0
 ; blob. Each response echoes payload[0] = the requested offset before
 ; the actual chunk bytes; checked here, same as gbdk's magb_read_config().
 ;
-; Output: A = result (0=OK); on success wConfigData holds the full blob
-; Clobbers: everything
-; MagbReadConfigSplit reads the same MAGB_CONFIG_SIZE bytes in two
-; requests split at an arbitrary point, because real Mobile Trainer
-; captures show the split is NOT fixed: 0x60+0x60 in one session and
-; 0x80+0x40 in another. An adapter that only ever sees the even split
-; has not really been tested on this command.
+; Real Mobile Trainer captures show the split is NOT fixed there
+; (0x60+0x60 in one session, 0x80+0x40 in another, for the same 192
+; bytes). This ROM always uses the even split, matching gbdk's
+; magb_read_config(); the observation is recorded in
+; gbdk/docs/protocol-notes.md rather than implemented. A
+; split-configurable variant existed briefly to serve the "session
+; ritual" and left with it (see docs/status.md, "No session ritual").
 ;
-; Input:  A = first chunk length (1..MAGB_CONFIG_SIZE-1)
+; Input:  none
 ; Output: A = result (0=OK); on success wConfigData holds the full blob
 ; Clobbers: everything
 MagbReadConfig::

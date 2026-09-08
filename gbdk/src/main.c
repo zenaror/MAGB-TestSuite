@@ -25,17 +25,15 @@ void main(void)
      * authenticate (GB00 HTTP, POP3) now refuse to run at all with an
      * explicit "SET ISP PASSWORD" failure while this is empty
      * (test_runner.c's require_password()), rather than sending a
-     * guessed value. Edited in place with ui_edit_text(), kept only in
-     * RAM (this ROM has no mapper/save), so it resets to empty on
-     * power-off. Capped at TEST_ISP_PASSWORD_MAX_LEN (8) chars --
-     * ui_edit_text() derives its own editable length from
-     * sizeof(isp_password), so this is the only place that limit needs
-     * to be expressed.
+     * guessed value. Edited in place with ui_edit_text(), and capped at
+     * TEST_ISP_PASSWORD_MAX_LEN (8) chars -- ui_edit_text() derives its
+     * own editable length from sizeof(isp_password), so this is the
+     * only place that limit needs to be expressed.
      *
-     * No longer lost on power-off: it is restored from battery-backed
-     * cart SRAM at boot and written back whenever it is edited (see
-     * save.h, and note what that means for the .sav file). Still not a
-     * compile-time default -- an absent or unreadable save leaves this
+     * It survives a power cycle: restored from battery-backed cart SRAM
+     * at boot and written back whenever it is edited (see save.h, and
+     * note what that means for the .sav file). Persisted is not the
+     * same as defaulted -- an absent or unreadable save leaves this
      * empty and the authenticating tests still refuse to run, which is
      * the behaviour that made the old guessed default worth deleting. */
     static char isp_password[TEST_ISP_PASSWORD_MAX_LEN + 1U];
@@ -43,7 +41,9 @@ void main(void)
     static test_result_t result;
     static uint8_t config_buf[MAGB_CONFIG_SIZE];
 
-    serial_hw_init(); /* fatal error screen + halt if not a CGB */
+    if (!serial_hw_init()) {
+        ui_fatal_not_cgb(); /* never returns */
+    }
     sound_init();
     (void)save_load_password(isp_password, sizeof(isp_password));
 

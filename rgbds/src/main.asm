@@ -12,7 +12,7 @@
 ;     <hex>" / "NINTENDO ECHO OK").
 ;   ISP/HTTP -- opens a 7-item submenu (RunIspHttpMenu/ShowIspSubMenu,
 ;     below), matching gbdk's ui_select_submenu()/kIspLabels[] (same
-;     wording, same order: Tamago Egg, News Config, News Article,
+;     wording, same order: Tamago Egg, Small Buffer, Big Buffer,
 ;     Trainer Home, Email Send, Email Recv, Raw TCP). All seven are
 ;     backed by real implementations: Tamago Egg and Trainer Home share
 ;     RunIspHttpCore's full Begin Session -> Read Identity -> Dial ->
@@ -2090,7 +2090,7 @@ BuildIspLoginPayload:
 ; never the isp_password[] variable: Raw TCP has no auth step of its
 ; own (libmobile doesn't validate ISP Login credentials either way), so
 ; there's nothing for a real password to help with here, and this way a
-; password set for News Config/Email Recv testing never leaks into an
+; password set for Small Buffer/Email Recv testing never leaks into an
 ; unrelated Raw TCP session by accident. A separate function rather than
 ; parameterizing BuildIspLoginPayload -- that one is already used by the
 ; hardware-confirmed Tamago Egg path; duplicating this specific ~25-line
@@ -4931,7 +4931,10 @@ SECTION "Isp Login Build Scratch", WRAM0
 wIspLoginBuiltPayload: ds ISP_LOGIN_PAYLOAD_MAX
 wIspLoginBuiltLen: db
 
-SECTION "News Test Scratch", WRAM0
+; Named for the News Article test originally, which is gone; the buffer
+; itself is not -- every GB00-authenticated test still reports its HTTP
+; status through it.
+SECTION "Gb00 Status Msg", WRAM0
 wGb00StatusMsg: ds 16 ; "HTTP nnn (AUTH)" + NUL
 
 ; Big enough for every command/message *this ROM sends* (wEmailCmdBuf
