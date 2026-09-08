@@ -1403,14 +1403,59 @@ Two changes, and the split between them matters:
   recognises the truncated `MAGB Te...` that earlier runs left behind.
   Without that the test could never clean up the mailbox it filled.
 
-Where the cap is applied, and why, is a server-side question. The obvious
-guess — that ten characters is Mobile Trainer's own subject width — is
-**wrong**: the project owner reports the truncation does not affect
-Mobile Trainer.
+### Where it comes from
 
-The general lesson is worth more than the constant: **a test that
-recognises its own artifacts by an exact string is betting that nothing
-between here and storage rewrites it.** Mail systems rewrite headers
+Confirmed by the REON maintainer: `mail/pop3Connection.js`,
+`SUBJECT_MAX_CHARS = 10` with `SUBJECT_ELLIPSIS = "..."` counted *inside*
+the ten. It is deliberate, and specified by the project owner.
+
+Two details worth knowing:
+
+- **It is not stored truncated.** `sys_inbox.message` keeps the whole
+  message with the original subject; the cut is applied while building
+  the view delivered over POP3 (`TOP` and `RETR`). The webmail still
+  shows the full subject. So what a Game Boy sees through `TOP` is a
+  *projection for the game*, not what is on disk — which matters if you
+  ever compare the two and think one of them is corrupt.
+- **The cut counts codepoints, not bytes** (`Array.from(text)` then
+  `slice`). That is not fussiness: a JIS subject is multibyte, and
+  cutting by byte would split a character and leave a dangling escape
+  sequence — a malformed header that a 2001-era parser has no way to
+  defend against. If you implement this yourself, cut on characters.
+
+Whether the cap "affects Mobile Trainer" is still being confirmed
+between the project owner and the server side, and this document will
+not guess: the owner told me it does not, while the maintainer quotes
+the original requirement as saying Mobile Trainer *does* receive the
+shortened title. The likely explanation is that two different limits
+were being discussed — the ten-character **subject** cap here, and a
+separate twelve-characters-per-line wrap that Mobile Trainer applies to
+the message **body** on its own.
+
+### Only some headers reach the game at all
+
+Volunteered by the maintainer, and it closes off an obvious alternative
+design before anyone spends a day on it. The view built for the game
+keeps exactly these headers and discards the rest:
+
+```
+MIME-Version, From, To, Subject, X-Game-title, X-Game-code
+(+ Content-Type, which is generated)
+```
+
+So tagging a message with a custom header — `X-Test-Id:` or similar — to
+recognise it later **does not work**: the header never arrives. Matching
+on the subject is not a shortcut here, it is the only channel that
+survives, which is why getting the truncation right matters as much as
+it does.
+
+`DELE` is also a soft delete: messages get `deleted_at` set and move to a
+30-day trash rather than vanishing.
+
+### The general lesson
+
+**A test that recognises its own artifacts by an exact string is betting
+that nothing between here and storage rewrites it.** Mail systems rewrite headers
 routinely — folding, re-encoding, capping. Match a prefix you have
 actually seen come back, and prefer sending something short enough that
 there is nothing to rewrite.

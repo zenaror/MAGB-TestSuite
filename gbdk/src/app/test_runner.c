@@ -68,10 +68,9 @@ static const char kCode32401[] = "32-401";
  * from TOP as "Subject: MAGB Te...", and every other subject in that
  * mailbox longer than 10 characters was cut the same way ("Este as...",
  * "Re: Hel..."), while shorter ones ("Teste 01", "Oi") came back intact.
- * Where the cap is applied, and why, is a question for the server side;
- * the project owner reports it does NOT affect Mobile Trainer, so the
- * obvious guess -- that it matches that client's subject width -- is
- * wrong and is not repeated here.
+ * It is deliberate, lives in REON's pop3Connection.js, and applies only
+ * to the view built for the game -- the full subject stays in storage
+ * and in the webmail. See docs/protocol-notes.md.
  *
  * So the subject SENT now fits inside the cap and survives the round trip
  * unchanged, and the string MATCHED is a prefix short enough to also
