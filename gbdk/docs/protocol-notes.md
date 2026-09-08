@@ -1205,11 +1205,13 @@ conversions in `sprintf(..., "Content-Length: %u ... X-Test-Checksum:
 `1fc0`). That coincidence was taken as proof that SDCC had dropped both
 conversions. It had not.
 
-The seven bytes were the `s_bb_auth_header` overflow described below.
-Intended content is 121 characters; the buffer was 112, so the tail
-spilled into `s_bb_auth_id`, and writing `X-Test-User` ("34") there put
-a NUL at index 114. `strlen` therefore returned 114 instead of 121 —
-**seven short**. Same number, entirely different cause.
+The seven bytes were the `s_bb_auth_header` overflow — the same one
+that produced the corrupted `Authorization` header in "An
+authentication bypass in REON's utility-auth cache" below. The intended
+value is 121 characters and the buffer was 112, so the tail spilled into
+`s_bb_auth_id`; writing `X-Test-User` ("34") there then put a NUL at
+index 114, and `strlen` returned 114 instead of 121 — **seven short**.
+Same number, entirely different cause.
 
 `%u` and `%hx` work. The result screens prove it: `DL 8192 B OK` and
 `MESSAGES: n` both print their numbers.
@@ -1278,6 +1280,15 @@ and because it was found *by accident*, through a bug of ours.
 The GBDK ROM had a ten-byte buffer overflow that put a corrupted
 `Authorization` header on the wire: the 92-character value truncated
 mid-base64, its closing quote and CRLF overwritten. Plainly malformed.
+
+`s_bb_auth_header` was `[16U + GB00_AUTHORIZATION_LEN + 4U]` = 112
+bytes, and holds `Authorization: GB00 name="` (26) + 92 + `"` + CRLF +
+NUL = 122. The `16` was a guess at the prefix length, which is 26. The
+overflow ran into `s_bb_auth_id`, and `X-Test-User` ("34") written there
+put a NUL at index 114 — which is also where the "seven missing bytes"
+above came from (121 − 114). The size is now derived from the literals
+with a compile-time assertion, verified by restoring the old 112 and
+watching the build fail.
 
 **The server answered `200` and reported the authenticated user.**
 
