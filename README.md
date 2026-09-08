@@ -113,8 +113,8 @@ TestSuite, each self-contained in its own top-level directory:
 
 | Directory | Language / toolchain | Status |
 | --- | --- | --- |
-| [`gbdk/`](gbdk/) | C, GBDK-2020/SDCC | Full test coverage, every test confirmed against a real server. |
-| [`rgbds/`](rgbds/) | Hand-written SM83 assembly, RGBDS | Same feature set, same tests, same results — see [`rgbds/docs/status.md`](rgbds/docs/status.md) for the per-routine detail. |
+| [`gbdk/`](gbdk/) | C, GBDK-2020/SDCC | Full test coverage; every test runtime-verified. |
+| [`rgbds/`](rgbds/) | Hand-written SM83 assembly, RGBDS | Full test coverage; every test runtime-verified. Per-routine detail in [`rgbds/docs/status.md`](rgbds/docs/status.md). |
 
 Neither is a subset of the other. They are kept behaviourally
 identical on purpose: two independent implementations disagreeing about

@@ -4,7 +4,8 @@ TestSuite: a Game Boy Color-only homebrew ROM written in C with
 [GBDK-2020](https://github.com/gbdk-2020/gbdk-2020). See the repo root
 [`README.md`](../README.md) for what the TestSuite is, what it tests,
 and how this implementation relates to the sibling
-[`rgbds/`](../rgbds/) one.
+[`rgbds/`](../rgbds/) one — a full peer with the same test set and the
+same runtime-verified results, not a lagging port.
 
 ## Prerequisites
 
