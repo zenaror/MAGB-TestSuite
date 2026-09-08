@@ -66,9 +66,12 @@ void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password
  * comparison against BIG BUFFER's doAuth(1)/type-0 route. */
 void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *password);
 
-/** The "BIG BUFFER" test: same GB00 challenge/response auth as NEWS
- * ARTICLE, but against REON's dedicated MAGBTEST fixture instead of a
- * real title's endpoint -- downloads TEST_BIGBUFFER_SIZE bytes
+/** The "BIG BUFFER" test: the large half of the pair, and the other
+ * half of REON's auth -- where SMALL BUFFER goes through doAuth(2)'s
+ * cached-Authorization route, this one takes doAuth(1) for the
+ * download and the three-request type-0 route for the upload (that
+ * handler exits after issuing a Gb-Auth-ID, so the second request's
+ * body is discarded by design). Downloads TEST_BIGBUFFER_SIZE bytes
  * (TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH), verifying it via a running
  * 16-bit additive checksum streamed against the response's
  * `X-Test-Checksum` header (never buffering more than one Transfer
@@ -89,7 +92,16 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
 
 /** Test 2c: like test_isp_email_send(), but against the configured
  * POP3 server: USER (the local part of the configured email address)
- * / PASS (`password`) / STAT, reporting the mailbox message count. */
+ * / PASS (`password`) / STAT, reporting the mailbox message count,
+ * then TOP n 0 over the listing to find this TestSuite's own messages
+ * and DELE them.
+ *
+ * It deletes ONLY messages whose subject starts with kTestEmailSubject
+ * -- deliberately unlike the real Mobile Trainer, which RETRs what it
+ * downloads and deletes all of it. This runs against a real mailbox;
+ * a test that removed everything it found would delete real mail.
+ * DELE only marks: the QUIT is what commits, so a failure partway
+ * through leaves the mailbox untouched. */
 void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *password);
 
 /** Test 2d ("RAW TCP"): Begin Session, Read Config (login/dial string

@@ -3,49 +3,22 @@
 #include <gb/gb.h>
 #include <gb/cgb.h>
 #include <gb/hardware.h>
-#include <gbdk/console.h>
-#include <stdio.h>
 
-static void fatal_not_cgb(void);
-
-static void fatal_not_cgb(void)
+bool serial_hw_init(void)
 {
-    /* This is an intentional, permanent halt: it is not a wait on
-     * external hardware (the Mobile Adapter), it is a refusal to run
-     * on the wrong console. The GBC-only serial clock configuration
-     * this TestSuite relies on does not apply to DMG/MGB. */
-    cls();
-    printf("\n FATAL PLATFORM ERROR\n\n"
-             " THIS ROM REQUIRES A\n"
-             " GAME BOY COLOR.\n\n"
-             " CGB-ONLY MOBILE\n"
-             " ADAPTER SERIAL MODE\n"
-             " IS NOT AVAILABLE ON\n"
-             " THIS CONSOLE.\n");
-    while (1) {
-        vsync();
-    }
-}
-
-void serial_hw_init(void)
-{
+    /* Reports the wrong-console case instead of drawing it. This file
+     * used to print a fatal screen here, which pulled <gbdk/console.h>
+     * and <stdio.h> into the hardware layer -- the one layer a homebrew
+     * author is most likely to copy wholesale, and the one that should
+     * know nothing about how (or whether) the program has a screen.
+     * The message now lives in the app layer (ui_fatal_not_cgb()). */
     if (_cpu != CGB_TYPE) {
-        fatal_not_cgb();
+        return false;
     }
     cpu_fast();
 
-    /* Unlike DMG, a CGB does NOT power on with a legible default
-     * background palette -- BGP-equivalent palette 0 is left
-     * undefined until explicitly set. Without this call, every
-     * printf()/cls() screen in this ROM renders with an undefined
-     * (observed: blank white, on both real hardware and BGB) palette
-     * even though the tile data/map and CPU execution are otherwise
-     * completely correct. set_default_palette() (gb/cgb.h) sets CGB
-     * palette 0 to the same white/light-gray/dark-gray/black scheme
-     * DMG uses by default. */
-    set_default_palette();
-
     serial_abort();
+    return true;
 }
 
 serial_hw_result_t serial_transfer_byte(uint8_t tx, uint8_t *rx)

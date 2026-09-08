@@ -21,7 +21,15 @@ typedef enum {
     UI_MENU_COUNT
 } ui_menu_item_t;
 
+/** Display bring-up: CGB palette 0 + clear screen. Must run before
+ * anything draws. */
 void ui_init(void);
+
+/** Shows the "this ROM needs a Game Boy Color" screen and never
+ * returns. Called by main() when serial_hw_init() reports a non-CGB
+ * console -- the hardware layer detects that, the app layer is what
+ * decides to say so on screen. */
+void ui_fatal_not_cgb(void);
 
 /** Draws the main menu and blocks (with a responsive joypad loop)
  * until the user picks a test (A) or asks for the trace viewer

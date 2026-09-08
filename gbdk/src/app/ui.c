@@ -4,6 +4,7 @@
 #include "sound.h"
 
 #include <gb/gb.h>
+#include <gb/cgb.h>
 #include <gbdk/console.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,12 +19,54 @@ static const char *const kMenuLabels[UI_MENU_COUNT] = {
 };
 
 /* Shared across ui_show_result()/ui_show_trace()/ui_show_config() --
- * SDCC doesn't pool identical literals and this ROM has no mapper. */
+ * SDCC doesn't pool identical literals, and only gb00_auth.c is banked
+ * here, so everything else still competes for the 32 KiB that is
+ * addressable at once. */
 static const char kBackHint[] = "A/B: MENU";
 
 void ui_init(void)
 {
+    /* Unlike DMG, a CGB does NOT power on with a legible default
+     * background palette -- BGP-equivalent palette 0 is left undefined
+     * until explicitly set. Without this call, every printf()/cls()
+     * screen in this ROM renders with an undefined (observed: blank
+     * white, on both real hardware and BGB) palette even though the
+     * tile data/map and CPU execution are otherwise completely
+     * correct. set_default_palette() (gb/cgb.h) sets CGB palette 0 to
+     * the same white/light-gray/dark-gray/black scheme DMG uses by
+     * default.
+     *
+     * This belongs here and not in serial_hw_init(), where it used to
+     * live: it is display bring-up, not serial hardware. A game with
+     * its own palettes drops this one line and keeps everything else. */
+    set_default_palette();
     cls();
+}
+
+void ui_fatal_not_cgb(void)
+{
+    /* This is an intentional, permanent halt: it is not a wait on
+     * external hardware (the Mobile Adapter), it is a refusal to run
+     * on the wrong console. The GBC-only serial clock configuration
+     * this TestSuite relies on does not apply to DMG/MGB.
+     *
+     * Deliberately does its own bring-up rather than requiring
+     * ui_init() first, so main() can call it the moment
+     * serial_hw_init() says no. set_default_palette() is a no-op's
+     * worth of harmless register writes on the DMG that is the only
+     * console able to reach this screen. */
+    set_default_palette();
+    cls();
+    printf("\n FATAL PLATFORM ERROR\n\n"
+             " THIS ROM REQUIRES A\n"
+             " GAME BOY COLOR.\n\n"
+             " CGB-ONLY MOBILE\n"
+             " ADAPTER SERIAL MODE\n"
+             " IS NOT AVAILABLE ON\n"
+             " THIS CONSOLE.\n");
+    for (;;) {
+        vsync();
+    }
 }
 
 bool ui_check_cancel(void)
@@ -504,9 +547,10 @@ static uint8_t wait_key_repeat(void)
 
 /* Shared between ui_edit_number() and ui_edit_text() -- their hint
  * lines are identical apart from one word ("DIGIT"/"CHAR"). SDCC
- * doesn't pool identical string literals across call sites, and this
- * ROM has no mapper (32 KiB, see the Makefile's LCCFLAGS comment), so
- * one shared format string is worth real bytes. */
+ * doesn't pool identical string literals across call sites, and only
+ * gb00_auth.c is banked (see the Makefile's LCCFLAGS comment), so
+ * everything here still competes for the same 32 KiB and one shared
+ * format string is worth real bytes. */
 static const char kEditHint[] =
     "L/R:MOVE\nU/D:%s\nA:OK B:BACK";
 

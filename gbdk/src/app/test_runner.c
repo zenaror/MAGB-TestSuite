@@ -18,13 +18,14 @@
  * ISP test hits the same "BEGIN SESSION FAILED"/kMsgDialIspFailed/...
  * failure points independently) -- shared constants instead of a
  * separate string literal per call site, since SDCC doesn't pool
- * identical literals itself and this ROM has no mapper (32 KiB, see
- * the Makefile's LCCFLAGS comment): with 8, 6, 6, 5, 5, 5, 4 and 3
+ * identical literals itself and only gb00_auth.c is banked here (see
+ * the Makefile's LCCFLAGS comment), so this file still competes for
+ * the 32 KiB addressable at once: with 8, 6, 6, 5, 5, 5, 4 and 3
  * call sites respectively, this was worth well over a hundred bytes,
  * the difference between fitting the on-screen keyboard and not. */
 /* "FAIL" rather than "FAILED" throughout this block -- purely a ROM
- * budget trim (this ROM has no mapper, 32 KiB fixed; see the
- * Makefile's LCCFLAGS comment) freed up when the Email Send test's
+ * budget trim (see the Makefile's LCCFLAGS comment for why unbanked
+ * code is still capped at 32 KiB) freed up when the Email Send test's
  * message grew real MIME headers (see that test's own comment). Kept
  * uniform across every constant in this group rather than shortening
  * only as many as strictly needed, so no two of these disagree on
@@ -576,8 +577,9 @@ static bool gb00_status_code(const uint8_t *resp, uint16_t resp_len, char status
 }
 
 /* ---- "BIG BUFFER": GB00-authenticated download/upload of a body far
- * larger than any buffer this mapperless, no-SRAM ROM could hold at
- * once ------------------------------------------------------------- */
+ * larger than any buffer this ROM could hold at once (8 KiB against a
+ * Game Boy's 8 KiB of total work RAM, of which this ROM has a fraction
+ * to spare) ------------------------------------------------------- */
 
 /* Caps the body-streaming poll loop in gb00_stream_continue() below --
  * TEST_BIGBUFFER_SIZE(8192) bytes at up to 254 bytes/poll needs at
@@ -865,8 +867,8 @@ static magb_result_t gb00_stream_request(magb_context_t *ctx, uint8_t conn_id,
  * failure, close the connection, then the usual best-effort ISP
  * Logout/Hang Up/End Session. Every failure site past ISP Login uses
  * exactly this same cleanup shape, so factoring it here (rather than
- * repeating 4 lines per site, ~10 sites) is a real code-size win on
- * this mapperless 32KB cart, not just a style preference. */
+ * repeating 4 lines per site, ~10 sites) is a real code-size win in
+ * this file's unbanked 32 KiB, not just a style preference. */
 static void bb_fail(magb_context_t *ctx, test_result_t *out, magb_result_t r,
                      const char *msg, uint8_t conn_id)
 {

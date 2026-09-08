@@ -26,8 +26,8 @@
 ; port keeps that same simplification.
 ;
 ; Placed in ROMX BANK[1] alongside gb00_auth.asm -- see that file's own
-; header comment for why (mapperless 32KB cart's fixed upper 16KB,
-; otherwise unused by RGBDS's default ROM0 placement).
+; header comment for why (the cart's upper 16KB, always mapped and
+; never switched, otherwise unused by RGBDS's default ROM0 placement).
 
 INCLUDE "protocol.inc"
 

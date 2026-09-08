@@ -1544,9 +1544,9 @@ ROM-address write exists anywhere outside `save.asm`. (The GBDK ROM has
 been running on MBC5 for a while and passes, which is the empirical
 half of the same answer.)
 
-Still not runtime-verified: the save has not been exercised across an
-actual power cycle (edit the password, power off, power on, check the
-field came back). Everything else in this ROM has.
+Verified across a real power cycle by the project owner on 2026-09-08:
+password edited, console powered off, powered back on, field came back
+filled.
 
 
 ## No session ritual (and why there was one)
@@ -1579,8 +1579,9 @@ Every test in both ROMs passes against the real REON server:
 | EMAIL SEND | pass | pass |
 | EMAIL RECV (incl. delete) | pass | pass |
 
-Not covered by that: the cartridge save across a real power cycle, and
-RAW TCP, which is an interactive viewer with no pass/fail.
+The cartridge save was confirmed across a real power cycle on the same
+day, on both ROMs. The one thing with no pass/fail of its own is RAW
+TCP, which is an interactive viewer rather than a scripted test.
 
 Worth remembering about EMAIL RECV: it deletes **only** messages
 carrying its own subject, and reads headers with `TOP n 0` rather than
