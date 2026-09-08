@@ -430,6 +430,8 @@ sBbAuthIdHdr:  db "Gb-Auth-ID:"
 sBbAuthIdHdrEnd:
 sBbTestUserHdr: db "X-Test-User:"
 sBbTestUserHdrEnd:
+sBbGbStatusHdr: db "Gb-Status:"
+sBbGbStatusHdrEnd:
 
 ; Caller-set inputs for BbFindHeaderToken (WRAM rather than registers:
 ; SM83 runs out of pairs fast, and the rest of this file already passes
@@ -447,6 +449,12 @@ SECTION "Big Buffer Token Code", ROMX, BANK[1]
 BbFindAuthId:
     ld hl, sBbAuthIdHdr
     ld b, sBbAuthIdHdrEnd - sBbAuthIdHdr
+    ld de, wBbAuthId
+    jr BbFindHeaderToken
+
+BbFindGbStatus:
+    ld hl, sBbGbStatusHdr
+    ld b, sBbGbStatusHdrEnd - sBbGbStatusHdr
     ld de, wBbAuthId
     jr BbFindHeaderToken
 
@@ -2194,23 +2202,37 @@ BbRunSmallTransfer::
     jp nz, .closeAndReturn
     call MagbTcpClose
 
-    ; A 401 here now has TWO possible meanings, and the second is new.
-    ; It used to mean only "the utility-auth window did not hold",
-    ; because REON's cache short-circuited on the first 44 characters of
-    ; the Authorization and returned the cached user without checking
-    ; the rest -- a corrupted credential still got a 200. That was an
-    ; authentication bypass, found through this test and fixed upstream
-    ; (see gbdk/docs/protocol-notes.md). The cache now compares a hash
-    ; of the whole value.
+    ; A 401 here is not one outcome but two, and REON's own source makes
+    ; them mutually exclusive -- both branches call header_remove()
+    ; first, so exactly one of these headers is present:
     ;
-    ; So a 401 here means the window expired OR the Authorization we
-    ; sent was wrong -- a real gain, since the server's answer can now
-    ; detect client-side credential corruption, which is exactly what it
-    ; could not do when a truncated header sailed through as
-    ; authenticated. Still worth naming separately from a checksum
-    ; disagreement.
+    ;   Gb-Status: 201      the challenge existed and the credential did
+    ;                       NOT match. This is the verdict.
+    ;   WWW-Authenticate:   the challenge session is gone (expired or
+    ;                       collected). Not a verdict on the credential
+    ;                       at all -- a fresh challenge inviting a new
+    ;                       handshake.
+    ;
+    ; (A window that expired with an intact Authorization does not 401 at
+    ; all: the full revalidation below the cache passes and the request
+    ; succeeds.)
+    ;
+    ; Only Gb-Status is tested -- its value is short enough to read,
+    ; while WWW-Authenticate's is ~57 characters and BbFindHeaderToken
+    ; refuses an over-long value. Being mutually exclusive, one test
+    ; settles both.
+    ;
+    ; Worth distinguishing only since REON fixed an authentication
+    ; bypass this test surfaced: until then a corrupted credential
+    ; returned 200, so "the credential was wrong" was not an outcome the
+    ; server could report. See gbdk/docs/protocol-notes.md.
     call BbStatusIs401
-    jp z, .authReuseRejected
+    jp nz, .notUnauthorized
+    call BbFindGbStatus
+    or a, a
+    jp nz, .authRejected
+    jp .challengeExpired
+.notUnauthorized
 
     ld a, [wBbBodyLen]
     ld hl, wBbBodyLen + 1
@@ -2231,8 +2253,11 @@ BbRunSmallTransfer::
 .notAuthed
     ld hl, sBbNotAuthed
     jr .failIsp
-.authReuseRejected
-    ld hl, sBbAuthReuseRejected
+.authRejected
+    ld hl, sBbAuthRejected
+    jr .failIsp
+.challengeExpired
+    ld hl, sBbChallengeExpired
     jr .failIsp
 .shortBody
     call BbBuildShortBodyDetail
@@ -2293,7 +2318,8 @@ BbRunSmallTransfer::
 
 sBbNoChallenge:        db "NO CHALLENGE", 0
 sBbNotAuthed:          db "NOT AUTHENTICATED", 0
-sBbAuthReuseRejected:  db "AUTH REUSE REJECTED", 0
+sBbAuthRejected:       db "AUTH REJECTED (201)", 0
+sBbChallengeExpired:   db "CHALLENGE EXPIRED", 0
 sBbShortBody:          db "SHORT BODY", 0
 
 sBbGotPrefix: db "GOT "
