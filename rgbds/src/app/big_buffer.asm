@@ -728,7 +728,7 @@ SECTION "Big Buffer Code 3", ROMX, BANK[1]
 
 ; ---- the streaming engine ---------------------------------------------
 
-; Shared engine behind BbStreamRequest/BbStreamRecv. Assumes
+; Shared engine behind BbStreamRequest. Assumes
 ; [wBbHeadLen] bytes are ALREADY sitting in wGb00RespBuf (from whatever
 ; got the connection to this point) and [wBbRemoteClosed] reflects the
 ; connection state as of that same read.
@@ -1126,19 +1126,6 @@ BbStreamRequest::
     pop af
     ret
 
-; Like BbStreamRequest, but for when the request was already sent in
-; full by the caller (the upload leg's header + 8192-byte body, across
-; many BbSendAll/BbSendRaw calls) and all that is left is to poll for
-; and stream the response.
-; Output: A = result (0=OK)
-; Clobbers: everything
-BbStreamRecv::
-    xor a, a
-    ld [wBbHeadLen], a
-    ld [wBbHeadLen + 1], a
-    ld [wBbRemoteClosed], a
-    jp BbStreamContinue
-
 sBbNoHttpPrefix: db "NO HTTP/ PREFIX", 0
 sBbSendFail:     db "HTTP SEND FAIL", 0
 sBbRecvFail:     db "HTTP RECV FAIL", 0
@@ -1460,20 +1447,40 @@ BbUploadBody:
     jr nz, .fill
     pop bc
 
+    ; sent += chunk_len, computed BEFORE the send so we can tell whether
+    ; this is the final chunk.
     push bc
-    ld de, wBbChunk
-    call BbSendRaw
-    pop bc
-    or a, a
-    jr nz, .sendFail
-
-    ; sent += chunk_len
     ld a, [wBbSent]
     add a, c
     ld [wBbSent], a
     ld a, [wBbSent + 1]
     adc a, 0
     ld [wBbSent + 1], a
+    pop bc
+
+    ; Final chunk? Then it must also RECEIVE -- one Transfer Data both
+    ; sends and receives, so a fast server's whole response arrives
+    ; bundled with the send that completed the request, and a send that
+    ; drops its output loses it. BbStreamRequest sends, receives and
+    ; streams, so BbRunTransfer needs no separate receive step after this.
+    ld a, [wBbSent]
+    cp a, BB_SIZE & $FF
+    jr nz, .notLast
+    ld a, [wBbSent + 1]
+    cp a, BB_SIZE >> 8
+    jr nz, .notLast
+
+    ld b, 0          ; BC = chunk_len as a 16-bit length
+    ld hl, wBbChunk
+    jp BbStreamRequest
+
+.notLast
+    push bc
+    ld de, wBbChunk
+    call BbSendRaw
+    pop bc
+    or a, a
+    jr nz, .sendFail
     jr .chunkLoop
 
 .done
@@ -1673,11 +1680,10 @@ BbRunTransfer::
     or a, a
     jp nz, .upHdrFail
 
+    ; BbUploadBody's final chunk goes through BbStreamRequest, so the
+    ; response is already parsed when this returns -- no separate
+    ; receive step.
     call BbUploadBody
-    or a, a
-    jp nz, .closeAndReturn
-
-    call BbStreamRecv
     or a, a
     jp nz, .closeAndReturn
     call MagbTcpClose
@@ -2171,13 +2177,19 @@ BbRunSmallTransfer::
     dec b
     jr nz, .fill
 
-    ld de, wBbChunk
-    ld c, BB_SMALL_SIZE
-    call BbSendRaw
-    or a, a
-    jp nz, .upBodyFail
-
-    call BbStreamRecv
+    ; The LAST send of a body must also RECEIVE.
+    ;
+    ; One Transfer Data both sends and receives, so a server quick
+    ; enough -- a small body to a server on the same machine -- has its
+    ; whole response arrive bundled with the very send that completed
+    ; the request. A send that drops its output loses that response, and
+    ; the poll afterwards finds only Transfer Data End; the test then
+    ; reports "NO HTTP/ PREFIX" for a request answered correctly. The
+    ; GBDK ROM failed exactly that way. BbStreamRequest already sends,
+    ; receives and streams, so the final chunk goes through it.
+    ld hl, wBbChunk
+    ld bc, BB_SMALL_SIZE
+    call BbStreamRequest
     or a, a
     jp nz, .closeAndReturn
     call MagbTcpClose

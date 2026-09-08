@@ -1235,3 +1235,45 @@ trail this file has followed before.
 Side effect worth noting: the GBDK ROM now emits **uppercase** hex, like
 the RGBDS one always did. The two had disagreed, and only REON's
 `strtoupper()` on the client header hid it.
+
+## The last send of a body must also receive
+
+`test_isp_small_buffer()`'s upload failed with `NO HTTP/ PREFIX` for a
+request the server had answered correctly. The BGB serial log shows why:
+
+```
+>>> 15 Transfer data (conn 0)     <- the 128-byte body
+    00 01 02 ... 7F
+<<< 15 Transfer data (conn 0)     <- the SAME exchange
+    HTTP/1.1 200 OK ... X-Test-Checksum: 0000 ... 00
+```
+
+One Transfer Data both sends **and** receives. A server quick enough — a
+small body to a server on the same machine — has its entire response
+arrive bundled with the very send that completed the request. The send
+discarded its output (`out_cap = 0`), so the response was lost, and the
+poll that followed found only Transfer Data End.
+
+This is the same bug `tcp_send_line()` had for the email tests, and the
+general shape is worth remembering: **on this protocol every send is
+also a receive, so any send that throws its output away can lose a whole
+response** — and whether it does depends only on how fast the peer is.
+
+The fix is narrow on purpose. `gb00_stream_request()` /
+`BbStreamRequest` already send, receive and stream correctly, so the
+*final* chunk of a body goes through them instead of through the
+discarding raw send. Nothing else changed: intermediate chunks still
+discard, which is safe because a server cannot answer before it has the
+whole declared `Content-Length`.
+
+An earlier attempt made *every* raw send accumulate into the shared
+response buffer instead. That broke both ROMs and was reverted. It is
+worth recording why, because the C and assembly versions failed
+differently and only one was obvious: in the RGBDS version the new code
+loaded `DE` with the accumulator offset to compute a receive cursor, and
+`DE` **is** that routine's data-pointer argument — so it started sending
+garbage. The lesson is not about that one register: widening a
+low-level, register-constrained routine's responsibilities is a much
+larger change than it looks, and the same fix expressed one layer up
+(let the existing send-and-receive path handle the last chunk) carries
+none of that risk.
