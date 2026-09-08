@@ -1133,9 +1133,21 @@ void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *
     (void)magb_tcp_close(ctx, conn_id);
     isp_http_cleanup(ctx, 0U, false, true);
 
-    /* A 401 here means the utility-auth window did not hold -- the one
-     * thing this leg exists to check. Worth naming separately from a
-     * checksum disagreement. */
+    /* A 401 here now has TWO possible meanings, and the second one is
+     * new. It used to mean only "the utility-auth window did not hold",
+     * because REON's cache short-circuited on the first 44 characters
+     * of the Authorization and returned the cached user without looking
+     * at the rest -- a corrupted credential still got a 200. That was
+     * an authentication bypass, found through this test and fixed
+     * upstream (see docs/protocol-notes.md). The cache now compares a
+     * hash of the whole value.
+     *
+     * So a 401 here means either the window expired OR the
+     * Authorization we sent was wrong -- which is a real gain: the
+     * server's answer can now detect client-side credential corruption,
+     * which is exactly what it could not do when a truncated header
+     * sailed through as authenticated. Still worth naming separately
+     * from a checksum disagreement. */
     if (strncmp(s_bb_status, "401", 3) == 0) {
         result_fail(out, MAGB_ERR_ISP, "AUTH REUSE REJECTED");
         return;
