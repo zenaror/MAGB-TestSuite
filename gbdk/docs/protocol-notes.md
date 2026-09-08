@@ -1277,3 +1277,56 @@ low-level, register-constrained routine's responsibilities is a much
 larger change than it looks, and the same fix expressed one layer up
 (let the existing send-and-receive path handle the last chunk) carries
 none of that risk.
+
+## An authentication bypass in REON's utility-auth cache (found, then fixed)
+
+Worth recording in full, because this TestSuite exists to validate
+REON-compatible services and this is the first real defect it produced —
+and because it was found *by accident*, through a bug of ours.
+
+The GBDK ROM had a ten-byte buffer overflow that put a corrupted
+`Authorization` header on the wire: the 92-character value truncated
+mid-base64, its closing quote and CRLF overwritten. Plainly malformed.
+
+**The server answered `200` and reported the authenticated user.**
+
+That is what made the client bug so hard to find — the failure surfaced
+three layers later as a rejected upload — and it is also a defect in its
+own right. `auth.php`'s type-2 (utility) path derived the session id
+from `substr($authString, 0, 44)` and, on a cache hit inside the
+15-minute window, returned the cached user id **before decoding or
+validating the rest of the value**. Our truncation happened past
+character 44, so the prefix still matched and the response half was
+never checked.
+
+The REON maintainer reproduced it directly: a legitimate handshake, then
+the same request with everything after character 44 replaced by `A`.
+`HTTP 200`.
+
+The sharp edge is where those 44 characters come from. They are not the
+client's secret — they are an echo of the challenge **the server itself
+published in the 401**. Anyone who saw only the challenge response could
+derive the session id without ever observing a client credential. The
+protocol carries no encryption regardless, but this was a step *down*
+from "replay a captured Authorization", which is what the code's own
+comment implied.
+
+Fixed upstream: the cache now stores a SHA-256 of the entire
+`Authorization` value and compares it with `hash_equals`. A miss is not
+a rejection — it falls through to full validation, so the legitimate
+reuse the cache exists for still works. Verified end to end: challenge →
+401, valid auth → 200, same auth repeated → 200, prefix-only → **401**
+(was 200). Type 0 is unaffected and remains single-use.
+
+**What this changes for the TestSuite.** A `401` on SMALL BUFFER's reuse
+leg used to mean only "the 15-minute window expired". It can now also
+mean "the Authorization we sent was wrong" — which is a gain, not an
+ambiguity: the server's answer can finally detect client-side credential
+corruption, which is precisely what it could not do while a truncated
+header authenticated successfully. Both ROMs' comments say so at the
+`AUTH REUSE REJECTED` site.
+
+A negative test — deliberately send a prefix-only Authorization and
+require a 401 — would pin this as a regression test for any
+REON-compatible server. Not implemented; it is a real change in what the
+suite does and belongs to a deliberate decision, not a drive-by.
