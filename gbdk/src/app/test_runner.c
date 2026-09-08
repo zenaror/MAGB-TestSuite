@@ -59,7 +59,28 @@ static const char kCode32401[] = "32-401";
  * scans POP3 headers for it) -- the two must never drift apart, since
  * the delete only removes messages carrying this ROM's own test
  * subject line, never anything else in the mailbox. */
-#define kTestEmailSubjectLine "Subject: MAGB TestSuite"
+/* What EMAIL SEND puts in the Subject header, and what EMAIL RECV looks
+ * for when deciding which messages are its own to delete.
+ *
+ * They are deliberately NOT the same string. REON stores subjects capped
+ * at 10 characters, replacing the tail with "..." when longer -- observed
+ * on the wire, not documented: this test's own "MAGB TestSuite" came back
+ * from TOP as "Subject: MAGB Te...", and every other subject in that
+ * mailbox longer than 10 characters was cut the same way ("Este as...",
+ * "Re: Hel..."), while shorter ones ("Teste 01", "Oi") came back intact.
+ * Where the cap is applied, and why, is a question for the server side;
+ * the project owner reports it does NOT affect Mobile Trainer, so the
+ * obvious guess -- that it matches that client's subject width -- is
+ * wrong and is not repeated here.
+ *
+ * So the subject SENT now fits inside the cap and survives the round trip
+ * unchanged, and the string MATCHED is a prefix short enough to also
+ * recognise the truncated form that older runs left behind -- otherwise
+ * this test could never clean up the mailbox it filled. Deletion had
+ * never once worked for exactly this reason: the comparison asked for
+ * 23 characters that the server had already thrown away. */
+#define kTestEmailSubject     "MAGB TEST"
+#define kTestEmailSubjectLine "Subject: MAGB"
 
 /* ---- MATS: TestSuite-only P2P payload framing (Section 33) --------
  * This is carried *inside* MAGB Transfer Data (0x15) payloads. It is
@@ -1724,7 +1745,7 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
             "MIME-Version: 1.0\r\n"
             "From: %s\r\n"
             "To: %s\r\n"
-            "Subject: MAGB TestSuite\r\n"
+            "Subject: " kTestEmailSubject "\r\n"
             "Content-Type: text/plain; charset=iso-2022-jp\r\n"
             "\r\n"
             "Hello from the Mobile Adapter GB TestSuite ROM.\r\n"
