@@ -126,6 +126,14 @@ precisely so the tests are reproducible on any REON host rather than on
 one particular person's — see [`server/README.md`](../../server/README.md)
 for installation, including the one change `download.php` needs.
 
+**Email Send delivers inside REON, not to the outside world.** It sends
+to the address in the adapter's own configuration. Mail actually
+*leaving* REON for an external mailbox goes through a device-authorization
+gate that is broken upstream in libmobile as of 2026-09-08 — see
+`docs/protocol-notes.md`, "Outbound mail is gated by device-auth". If
+you point this test at an external address and get a 554, that is not
+this ROM.
+
 **Email Recv deletes only its own messages.** It reads headers with
 `TOP n 0` and issues `DELE` only for subjects matching its own, unlike
 the real Mobile Trainer, which `RETR`s what it downloads and deletes

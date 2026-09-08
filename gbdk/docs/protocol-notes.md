@@ -1490,3 +1490,41 @@ that nothing between here and storage rewrites it.** Mail systems rewrite header
 routinely — folding, re-encoding, capping. Match a prefix you have
 actually seen come back, and prefer sending something short enough that
 there is nothing to rewrite.
+
+## Outbound mail is gated by device-auth, and that gate is broken upstream
+
+**Relayed 2026-09-08 by the session running the REON server, traced by
+the session running mGBA. Not reproduced or verified from this
+repository** — recorded here because it changes how to read an email
+failure today, not because this ROM implements any part of it.
+
+REON gates outbound mail (a message actually leaving REON for a real
+external mailbox) behind a device-authorization endpoint: libmobile
+tells REON `authorize` when a device starts using mail and
+`deauthorize` when it is done, and Postfix refuses to relay for a
+device sitting at `authorized=0`.
+
+The reported defect is an ordering one inside libmobile. The
+`authorize` event is *generated* mid-PPP-session, but the gate that
+dispatches those events only opens when the session goes idle. The
+`deauthorize` from the disconnect overwrites the still-pending
+`authorize` before it is ever sent. The server-side signature is
+unambiguous: 18 `deauthorize` and zero `authorize` in one day, every
+device stuck at `authorized=0`, and Postfix rejecting with 554.
+
+**What this means for this TestSuite's EMAIL SEND, precisely:** the
+test passes, and that is not a contradiction. It sends to the address
+in the adapter's own configuration — a REON-internal delivery, which
+never reaches the Postfix relay path this gate protects. A test that
+sent to an external address would fail today, and would fail for a
+reason that is neither in this ROM nor in REON's mail server.
+
+So: **do not treat a 554 on external mail as a TestSuite bug** while
+this is open. Check whether `authorize` ever arrived server-side
+before looking anywhere else.
+
+Related but distinct, and already fixed: a pending device-auth event
+could also starve behind a freshly started relay number-fetch, since
+both share one socket buffer (libmobile `935aec7`, mutual-exclusion
+gating in `mobile_actions_get()`). Same subsystem, different failure —
+don't assume one fix covers the other.
