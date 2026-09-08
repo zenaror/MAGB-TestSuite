@@ -1235,3 +1235,59 @@ trail this file has followed before.
 Side effect worth noting: the GBDK ROM now emits **uppercase** hex, like
 the RGBDS one always did. The two had disagreed, and only REON's
 `strtoupper()` on the client header hid it.
+
+## Two bugs behind one "SMALL BUFFER upload failed"
+
+Found from raw BGB serial bytes after the sprintf fix did not clear the
+failure. Both were in the GBDK ROM; both are worth recording because
+neither is visible from the screen and one was latent in the RGBDS ROM
+too.
+
+### 1. The Authorization header overflowed its buffer
+
+`s_bb_auth_header` was declared `[16U + GB00_AUTHORIZATION_LEN + 4U]` =
+112 bytes. What it holds is `Authorization: GB00 name="` (26) + 92 + `"`
++ CRLF + NUL = **122**. The `16` was a guess at the prefix length, which
+is 26.
+
+The ten-byte overflow ran into the next static, `s_bb_auth_id`. That is
+harmless for BIG BUFFER, which is finished with the header before it
+reads `Gb-Auth-ID`. SMALL BUFFER reads `X-Test-User` into that same
+buffer **between** building the header and sending it, so the serial log
+shows the Authorization value truncated mid-base64 with the user id
+(`34`) pasted over its closing quote and CRLF:
+
+```
+...51 46 33 34 43 6F 6E 74 65 6E 74 2D 4C 65 6E 67 74 68
+     Q  F  3  4  C  o  n  t  e  n  t  -  L  e  n  g  t  h
+```
+
+With no closing quote the header line never ended, `Content-Length` was
+swallowed into it, nginx forwarded no body, and PHP answered with the
+checksum of nothing. The size is now derived from the literals with a
+compile-time assertion — verified by putting the old 112 back, which
+fails the build.
+
+### 2. A response bundled with the send was thrown away
+
+`tcp_send_raw()` passed a zero-capacity output buffer, on the reasoning
+that an HTTP/1.0 server does not reply mid-request. That is true of the
+reply's *timing* and false of its *framing*: one Transfer Data both
+sends and receives, so a server quick enough — 128 bytes to a server on
+the same machine — has its entire response arrive bundled with the very
+send that completed the request. The following poll then finds only
+Transfer Data End, and the test reports `NO HTTP/ PREFIX` for a request
+the server answered correctly.
+
+This is the same bug `tcp_send_line()` had for the email tests, with the
+same fix: accumulate what arrives instead of discarding it. BIG BUFFER
+hid it by sending 8 KiB across ~33 calls, so its reply always landed in
+a later poll.
+
+**The RGBDS ROM had this bug too and passed anyway** — its reply
+happened to land in a later poll. It was fixed there as well rather than
+left resting on timing.
+
+The general shape is worth remembering: on this protocol a send is
+always also a receive, so *any* send that discards its output can lose a
+whole response, and whether it does depends on how fast the peer is.
