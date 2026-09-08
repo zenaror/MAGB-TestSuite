@@ -45,6 +45,18 @@ its own — `0.smallbuffer.php` calls `doAuth(2)` itself, and
 
 ## Things that look like details and are not
 
+- **These paths must be reachable over plain HTTP — no HTTPS redirect.**
+  The ROM speaks HTTP/1.0, sends no `Host` header, does not follow a
+  `301`/`302`, and does not do TLS. So if the front of your server
+  answers a request for one of these paths with a redirect to HTTPS, the
+  ROM simply stops: it cannot follow the redirect and cannot open the
+  TLS connection, and from the Game Boy side it looks like the request
+  hung or the server vanished, with nothing pointing at the redirect as
+  the cause. A server that redirects browser traffic to HTTPS is fine —
+  common, even — as long as the MAGBTEST paths (and anything else the
+  ROM fetches) are exempted and stay on HTTP. Test the exemption the way
+  the ROM hits it, with an HTTP/1.0 request carrying no `Host`, not with
+  a browser.
 - **`.cgb` resolves to `.php`.** `core.php` falls back to `.php` when
   the literal file is missing, so the ROMs request
   `/01/MAGBTEST/0.bigbuffer.cgb`. Do not rename the files.
