@@ -1323,8 +1323,23 @@ leg used to mean only "the 15-minute window expired". It can now also
 mean "the Authorization we sent was wrong" — which is a gain, not an
 ambiguity: the server's answer can finally detect client-side credential
 corruption, which is precisely what it could not do while a truncated
-header authenticated successfully. Both ROMs' comments say so at the
-`AUTH REUSE REJECTED` site.
+header authenticated successfully.
+
+And the two are not actually ambiguous on the wire. Both branches in
+`auth.php` call `header_remove()` before answering, so exactly one of
+these is present:
+
+| response | meaning |
+|---|---|
+| `401` + `Gb-Status: 201` | the challenge existed and the credential did **not** match — the verdict |
+| `401` + `WWW-Authenticate:` | the challenge session is gone; not a verdict at all, but a fresh challenge inviting a new handshake |
+| `200` | the window expired but the Authorization was intact — full revalidation passed and the request simply succeeded |
+
+Both ROMs branch on this and report `AUTH REJECTED (201)` or
+`CHALLENGE EXPIRED` rather than one vague message. Only `Gb-Status` is
+tested: its value is short enough to read, while `WWW-Authenticate`'s is
+~57 characters and the token reader refuses an over-long value — and
+since the two are mutually exclusive, one test settles both.
 
 A negative test — deliberately send a prefix-only Authorization and
 require a 401 — would pin this as a regression test for any
