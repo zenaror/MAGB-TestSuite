@@ -2777,7 +2777,7 @@ sSmtpMimeFromEnd:
 sSmtpToSep: db $0D, $0A, "To: "
 sSmtpToSepEnd:
 sSmtpHeadersRest:
-    db $0D, $0A, "Subject: MAGB TestSuite", $0D, $0A
+    db $0D, $0A, "Subject: MAGB TEST", $0D, $0A
     db "Content-Type: text/plain; charset=iso-2022-jp", $0D, $0A
     db $0D, $0A
     db "Hello from the Mobile Adapter GB TestSuite ROM.", $0D, $0A
@@ -3136,7 +3136,13 @@ sPop3HeaderEnd2End:
 ; Same "Subject: MAGB TestSuite" text BuildSmtpBody's sSmtpHeadersRest
 ; chunk sends -- a standalone copy is needed here since this one is
 ; compared against, not sent, and needs its own addressable start/end.
-sSmtpSubjectLine: db "Subject: MAGB TestSuite"
+; Matched as a PREFIX, and deliberately shorter than what is sent. REON
+; caps stored subjects at 10 characters, replacing the tail with "..."
+; when longer -- observed on the wire: "MAGB TestSuite" came back from
+; TOP as "Subject: MAGB Te...". The sent subject now fits the cap, and
+; this prefix also recognises the truncated form older runs left in the
+; mailbox. See gbdk/src/app/test_runner.c's kTestEmailSubjectLine.
+sSmtpSubjectLine: db "Subject: MAGB"
 sSmtpSubjectLineEnd:
 sExpectOk: db "+OK"
 
