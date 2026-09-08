@@ -1376,9 +1376,30 @@ Two implementation details that are easy to get wrong:
   a fixture problem; calling it a security finding would be a false
   alarm.
 
-Not yet runtime-verified — it compiles clean on both ROMs and its logic
-mirrors the reproduction the REON maintainer ran by hand, but neither
-ROM has executed it against the live server yet.
+**Runtime-verified on GBDK, 2026-09-08.** Both halves, for the first
+time. The ROM showed `PASS` / `GB-ST 201`, and the server log for the
+same request showed the prefix boolean saying *matches — corresponds to
+a challenge issued*:
+
+```text
+14:58:18  GET  smallbuffer  no Authorization                      -> 401
+14:58:19  GET  smallbuffer  Authorization: 104 chars,
+                            ends in 'AAAAAAAAAAA"'
+                            44-char prefix matches: YES            -> 401
+```
+
+That is case 1 of the table above — the only one in which the test
+proves what it claims. A wrong offset would have logged *no challenge
+with that id*, and did not. The `401` was the verdict kind (`Gb-Status`
+present), not a bare or expired-challenge one.
+
+The contrapositive ran a minute earlier in the same session: SMALL
+BUFFER sent the *undamaged* value from the same builder — prefix
+matches AND tail valid — and got `200` on both its GET and its POST,
+the cache-reuse leg working on real traffic. Same builder, same session,
+differing only in the tail. That is what closes the inference.
+
+RGBDS has not run it yet.
 
 #### The way this test could pass while proving nothing
 
