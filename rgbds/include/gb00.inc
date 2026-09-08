@@ -23,6 +23,14 @@ DEF GB00_CHALLENGE_LEN EQU 48
 ; The Authorization "name" value built in response (44 + 48 characters).
 DEF GB00_AUTHORIZATION_LEN EQU 92
 
+; How much of an Authorization is an echo of the server's own published
+; challenge, and therefore proves nothing about the client. Only the
+; remaining GB00_AUTHORIZATION_LEN - GB00_AUTH_PREFIX_LEN characters
+; carry the credential; a server validating just the prefix
+; authenticates anyone who can read the 401 it just sent. Used by the
+; server-conformance test (big_buffer.asm's BbRunAuthPrefix).
+DEF GB00_AUTH_PREFIX_LEN EQU 44
+
 ; Sized against a real nginx 401 challenge response measured from a BGB
 ; link-log capture -- see gb00_auth.asm's own note before changing it.
 DEF GB00_RESP_BUF_SIZE EQU 360

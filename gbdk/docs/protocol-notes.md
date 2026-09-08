@@ -1335,6 +1335,51 @@ ambiguity: the server's answer can finally detect client-side credential
 corruption, which is precisely what it could not do while a truncated
 header authenticated successfully.
 
+### The regression test, and why it is not an adapter test
+
+Both ROMs now carry **AUTH PREFIX**, which does deliberately what the
+overflow did by accident: takes a valid `Authorization`, keeps the
+44-character prefix, replaces everything after it, and requires the
+server to refuse.
+
+It lives under its own main-menu entry, **SERVER CONF**, not in the
+ISP/HTTP submenu. That separation is the point. Every test in ISP/HTTP
+passes when the adapter, libmobile and the link behave; this one passes
+when the *server* is correctly configured, and it can fail while the
+adapter is perfect. A red result whose meaning depends on which list it
+came from is exactly the ambiguity this ROM exists to remove.
+
+Three outcomes, deliberately distinguished:
+
+| response | verdict |
+| --- | --- |
+| `200` | **FAIL, "BYPASS OPEN"** — this server lacks the fix |
+| `401` + `Gb-Status` | **PASS** — full validation ran and rejected it |
+| `401`, no `Gb-Status` | **FAIL, "CHALLENGE EXPIRED"** — inconclusive, nothing judged the credential |
+
+`Gb-Status` is what is asserted on, not the bare `401`, because a 401
+alone cannot tell a verdict from an expired challenge. Its value is
+displayed rather than merely checked, so a server that someday answers a
+different code shows up instead of being flattened into the same PASS.
+
+Two implementation details that are easy to get wrong:
+
+- The tail is destroyed by flipping each character between `A` and `B`,
+  not by writing a fixed filler. A constant filler could in principle
+  coincide with the real tail, and a negative test that silently sent a
+  **valid** credential would pass while proving the opposite of what it
+  claims. Both are base64 characters, so the value still decodes — to
+  the wrong bytes. The length is unchanged, so the request is
+  well-formed in every respect except the credential.
+- "The server never challenged us" is reported as `NO CHALLENGE`, not as
+  a bypass. An endpoint that serves without asking for authentication is
+  a fixture problem; calling it a security finding would be a false
+  alarm.
+
+Not yet runtime-verified — it compiles clean on both ROMs and its logic
+mirrors the reproduction the REON maintainer ran by hand, but neither
+ROM has executed it against the live server yet.
+
 ### The three kinds of 401
 
 They are not ambiguous on the wire, but there are **three**, not two —

@@ -18,6 +18,11 @@ typedef enum {
     UI_MENU_ISP_HTTP,
     UI_MENU_P2P_CALLER,
     UI_MENU_P2P_LISTENER,
+    /* Server conformance, deliberately last and deliberately not inside
+     * ISP/HTTP -- see test_runner.h. Everything above tests the
+     * adapter; this tests the server, and can fail while the adapter is
+     * perfect. */
+    UI_MENU_SERVER_CONF,
     UI_MENU_COUNT
 } ui_menu_item_t;
 

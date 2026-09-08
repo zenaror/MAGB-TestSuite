@@ -1583,9 +1583,68 @@ The cartridge save was confirmed across a real power cycle on the same
 day, on both ROMs. The one thing with no pass/fail of its own is RAW
 TCP, which is an interactive viewer rather than a scripted test.
 
+Added after that table and **not covered by it**: SERVER CONF /
+AUTH PREFIX, which has not been run against the live server on either
+ROM yet -- see "Server conformance" below.
+
 Worth remembering about EMAIL RECV: it deletes **only** messages
 carrying its own subject, and reads headers with `TOP n 0` rather than
 fetching bodies. The real Mobile Trainer does the opposite — it `RETR`s
 what it downloads and deletes all of it. The difference is deliberate:
 this test runs against the owner's real mailbox, and a test that removed
 everything it found would delete real mail.
+
+
+## Server conformance: AUTH PREFIX (`src/app/big_buffer.asm`)
+
+`BbRunAuthPrefix::`, reached from a new **main-menu** item ("SERVER
+CONF") rather than from the ISP/HTTP submenu. That placement is the
+design, not a convenience: every ISP/HTTP target passes when the
+adapter, libmobile and the link behave, and this one passes when the
+*server* is correctly configured. It can fail while the adapter is
+perfect, and a red result that could mean either would be worse than no
+test at all.
+
+It rides `RunBufferTestCommon` (`main.asm`) like the two buffer tests,
+so the entire session harness — Begin Session, Read Identity, Dial, ISP
+Login, DNS, teardown — is shared; only the title and the transfer
+routine differ. Adding it cost no session code.
+
+What it does: unauthenticated GET against the SMALL BUFFER endpoint to
+collect a real challenge, `BbChallengeAuth` to build the correct
+`Authorization`, then damage it in place in `wGb00Authorization` before
+`BbBuildSmallAuthReq` copies it into the request — keep the first
+`GB00_AUTH_PREFIX_LEN` (44) characters, flip every one of the remaining
+48 between `"A"` and `"B"`. Close, reopen (REON requires a fresh
+connection for the authenticated retry), send, judge.
+
+Why flip rather than fill: a fixed filler could in principle coincide
+with the real tail, and a negative test that silently sent a **valid**
+credential would pass while proving the opposite of what it claims.
+Flipping changes all 48 by construction. Both are base64 characters, so
+the value still decodes — to the wrong bytes — and the length is
+unchanged, so the request is well-formed in every respect except the
+credential.
+
+Outcomes:
+
+| response | result |
+| --- | --- |
+| `200` | FAIL `BYPASS OPEN`, with `HTTP 200` on the second line |
+| `401` + `Gb-Status` | PASS, detail `GB-ST <value>` |
+| `401`, no `Gb-Status` | FAIL `CHALLENGE EXPIRED` — inconclusive, not a pass |
+| served with no challenge | FAIL `NO CHALLENGE` — fixture problem, not a finding |
+
+`Gb-Status` is what is asserted on rather than the bare `401`, because a
+401 alone cannot separate a verdict on the credential from an expired
+challenge. The value is displayed, not just tested, so a server that
+someday answers a different code is visible instead of being flattened
+into the same PASS. `BbFindGbStatus` already existed for SMALL BUFFER's
+upload leg.
+
+Space after adding it: ROM0 4001 free, ROMX 8515 free. Still 32 KiB.
+
+**Not runtime-verified.** Both ROMs build clean and the logic mirrors
+the reproduction the REON maintainer ran by hand, but neither has
+executed this against the live server yet. It is the only test in either
+ROM in that state.

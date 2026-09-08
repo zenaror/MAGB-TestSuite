@@ -73,6 +73,19 @@ uint16_t base64_decode(const char *in, uint16_t in_len, uint8_t *out) GB00_BANKE
 #define GB00_CHALLENGE_LEN      48U
 #define GB00_AUTHORIZATION_LEN  92U
 
+/** How much of an Authorization is an echo of the server's own
+ * published challenge, and therefore proves nothing about the client.
+ *
+ * The first GB00_AUTH_PREFIX_LEN characters are derived from the
+ * challenge alone; only the remaining
+ * GB00_AUTHORIZATION_LEN - GB00_AUTH_PREFIX_LEN carry the credential.
+ * A server that validates only the prefix accepts anyone who can read
+ * the 401 it just sent -- which is exactly the bypass this project
+ * found in REON's utility-auth cache (docs/protocol-notes.md, "An
+ * authentication bypass in REON's utility-auth cache"). Used by the
+ * server-conformance test that checks the fix is in place. */
+#define GB00_AUTH_PREFIX_LEN    44U
+
 /** Builds the Authorization header's "name" value (GB00_AUTHORIZATION_LEN
  * characters + NUL) for the given challenge (exactly GB00_CHALLENGE_LEN
  * base64 characters, as received verbatim in the WWW-Authenticate

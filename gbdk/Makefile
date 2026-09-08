@@ -115,7 +115,7 @@ CFLAGS_EXTRA ?=
 #     "Multiple write ... Possible overflow from Bank 0 into Bank 1"
 #     and would have corrupted both. Banked modules start at bank 2.
 #
-#   -Wl-b_HOME=0x0200 -Wl-b_CODE=0x0C00
+#   -Wl-b_HOME=0x0200 -Wl-b_CODE=0x0BE0
 #     `_HOME` holds ___sdcc_bcall_ehl, the trampoline that performs the
 #     bank switch and the far call. By default the linker emits `_CODE`
 #     first and `_HOME` after it, which put the trampoline at 0x76E1 --
@@ -123,10 +123,24 @@ CFLAGS_EXTRA ?=
 #     the MBC5 register it unmapped ITSELF and the CPU carried on
 #     executing whatever gb00_auth happened to have at that address.
 #     Pinning `_HOME` to 0x0200 and starting `_CODE` after it keeps the
-#     trampoline (and everything else in _HOME) in bank 0. 0x0C00 leaves
-#     _HOME room to grow; if it ever outgrows that the linker overlaps
-#     the two areas, so `make check-banking` verifies the result rather
-#     than trusting the constant.
+#     trampoline (and everything else in _HOME) in bank 0. The start
+#     address leaves _HOME room to grow; if it ever outgrows that the
+#     linker overlaps the two areas, so `make check-banking` verifies
+#     the result rather than trusting the constant.
+#
+#     0x0BE0, not the original 0x0C00: _HOME+_INITIALIZER+_GSINIT end
+#     at 0x0B92 today, so 0x0C00 left 110 bytes of pure padding while
+#     the flat _CODE region was 13 bytes past its 0x8000 ceiling. 0x0BE0
+#     reclaims 32 of those and still leaves 78 bytes of headroom. Raise
+#     it again if _GSINIT grows (it does when initialized statics are
+#     added) -- the linker says so loudly, it does not corrupt silently.
+#
+#     Do not read this as "there is room". The flat region is nearly
+#     full: any further growth needs something moved into a bank, and
+#     the only modules eligible are leaves that call nothing outside
+#     themselves. magb_fmt.c and magb_config.c look eligible but are
+#     NOT -- their 16-bit / and % emit calls to SDCC's __divuint/
+#     __moduint helpers, which live in the flat region above 0x4000.
 #
 # The same reasoning is why src/app/gb00_auth.c calls NOTHING external
 # -- it has local copies of memcpy/strlen instead of <string.h>'s,
@@ -135,7 +149,7 @@ CFLAGS_EXTRA ?=
 # dispatch into crt0 code below 0x1000 and the serial IRQ is unused
 # (this ROM polls SC_REG), so nothing in an ISR path is ever unmapped.
 LCCFLAGS := -msm83:gb -Wm-yC -Wl-yt0x1B -Wl-ya1 -Wm-yoA -autobank -Wb-ext=.rel -Wb-min=2 \
-            -Wl-b_HOME=0x0200 -Wl-b_CODE=0x0C00 \
+            -Wl-b_HOME=0x0200 -Wl-b_CODE=0x0BE0 \
             -Wm-yn"$(ROM_NAME)" -I$(INCLUDE_DIR) $(CFLAGS_EXTRA)
 
 .PHONY: all clean test toolchain-check check-banking

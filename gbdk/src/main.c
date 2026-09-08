@@ -169,6 +169,12 @@ void main(void)
             ui_show_result("P2P LISTENER", &result);
             break;
 
+        case UI_MENU_SERVER_CONF:
+            ui_show_testing(false);
+            test_srv_auth_prefix(&ctx, &result, isp_password);
+            ui_show_result("AUTH PREFIX", &result);
+            break;
+
         case UI_MENU_READ_CONFIG:
             test_read_config(&ctx, config_buf, &result);
             if (result.passed) {

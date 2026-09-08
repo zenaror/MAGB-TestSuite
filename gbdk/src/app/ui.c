@@ -15,7 +15,8 @@ static const char *const kMenuLabels[UI_MENU_COUNT] = {
     "ISP PASSWORD",
     "ISP/HTTP",
     "P2P CALLER",
-    "P2P LISTENER"
+    "P2P LISTENER",
+    "SERVER CONF"
 };
 
 /* Shared across ui_show_result()/ui_show_trace()/ui_show_config() --

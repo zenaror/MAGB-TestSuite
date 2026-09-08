@@ -131,6 +131,50 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
 void test_p2p_listener(magb_context_t *ctx, test_result_t *out);
 
 
+/* ---- Server conformance -----------------------------------------------
+ *
+ * Deliberately a separate section, reached from its own main-menu entry
+ * rather than from the ISP/HTTP submenu. Everything above tests the
+ * ADAPTER: it passes when the Mobile Adapter, libmobile and the link
+ * behave. What follows tests the SERVER, and can fail while every
+ * adapter test passes. Mixing the two would make a red result
+ * ambiguous about which side is broken, which is the one thing this
+ * ROM exists to avoid.
+ *
+ * (One test today. When a second arrives, this becomes a submenu the
+ * way ISP/HTTP is; a submenu of one would be ceremony.)
+ */
+
+/** Sends an Authorization whose first GB00_AUTH_PREFIX_LEN characters
+ * are correct and whose remaining characters are not, and requires the
+ * server to REJECT it.
+ *
+ * Those first 44 characters are an echo of the challenge the server
+ * itself just published in its 401. Anyone who can read that 401 can
+ * reproduce them without knowing any credential, so a server that
+ * validates only the prefix authenticates nobody. REON did exactly
+ * that in its utility-auth cache -- found from this ROM's side, by
+ * accident, when a buffer overflow truncated a real Authorization and
+ * the server accepted it anyway (docs/protocol-notes.md).
+ *
+ * PASS means 401 carrying `Gb-Status: 201` -- the server's verdict on
+ * the credential. The three outcomes are deliberately distinguished,
+ * because they are three different facts:
+ *
+ *   200                     the bypass is open: this server lacks the
+ *                           fix, and its auth can be replayed by
+ *                           anyone who can read a challenge.
+ *   401 + Gb-Status: 201    PASS. Full validation ran and rejected it.
+ *   401, no Gb-Status       inconclusive, not a pass -- the challenge
+ *                           expired, so nothing judged the credential.
+ *
+ * Needs the same ISP password as the other authenticating tests: the
+ * VALID Authorization has to be built first, and then damaged, or the
+ * request would be rejected for a reason that has nothing to do with
+ * the prefix. */
+void test_srv_auth_prefix(magb_context_t *ctx, test_result_t *out, const char *password);
+
+
 /** Read Configuration Data (0x19), both halves, into `config_out`. */
 void test_read_config(magb_context_t *ctx, uint8_t config_out[MAGB_CONFIG_SIZE], test_result_t *out);
 
