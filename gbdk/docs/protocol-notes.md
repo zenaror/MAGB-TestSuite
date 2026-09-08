@@ -1376,30 +1376,55 @@ Two implementation details that are easy to get wrong:
   a fixture problem; calling it a security finding would be a false
   alarm.
 
-**Runtime-verified on GBDK, 2026-09-08.** Both halves, for the first
-time. The ROM showed `PASS` / `GB-ST 201`, and the server log for the
-same request showed the prefix boolean saying *matches — corresponds to
-a challenge issued*:
+**Runtime-verified on both ROMs, 2026-09-08.** Both halves, on both
+implementations. Each showed `PASS` / `GB-ST 201`, and the server log
+for each of those requests recorded the prefix boolean as *matches —
+corresponds to a challenge issued*:
 
 ```text
-14:58:18  GET  smallbuffer  no Authorization                      -> 401
-14:58:19  GET  smallbuffer  Authorization: 104 chars,
-                            ends in 'AAAAAAAAAAA"'
-                            44-char prefix matches: YES            -> 401
+GBDK   14:58:18  GET  no Authorization                        -> 401
+       14:58:19  GET  104 chars, 44-char prefix matches: YES  -> 401
+
+RGBDS  15:00:59  GET  no Authorization                        -> 401
+       15:01:00  GET  104 chars, 44-char prefix matches: YES  -> 401
 ```
 
 That is case 1 of the table above — the only one in which the test
-proves what it claims. A wrong offset would have logged *no challenge
-with that id*, and did not. The `401` was the verdict kind (`Gb-Status`
-present), not a bare or expired-challenge one.
+proves what it claims. Neither landed on the middle case, *no challenge
+with that id*, which is the signature of an offset spilling into the
+prefix. And that is the point of running both: the two compute the
+offset independently (C indexes into the built header string, the
+assembly overwrites `wGb00Authorization` in place), so agreement here is
+two implementations confirming the same fact, not one confirming itself.
 
-The contrapositive ran a minute earlier in the same session: SMALL
-BUFFER sent the *undamaged* value from the same builder — prefix
-matches AND tail valid — and got `200` on both its GET and its POST,
-the cache-reuse leg working on real traffic. Same builder, same session,
-differing only in the tail. That is what closes the inference.
+The contrapositive ran a minute earlier in each session: SMALL BUFFER
+sent the *undamaged* value from the same builder — prefix matches AND
+tail valid — and got `200` on both its GET and its POST, the cache-reuse
+leg working on real traffic. Same builder, same session, differing only
+in the tail. That is what closes the inference.
 
-RGBDS has not run it yet.
+### Why the forged tail reads as almost all `A`
+
+Both logs showed the tail ending `AAAAAAAAAAA"`, which looks like a
+fixed filler — the very thing this deliberately avoids. It isn't, and
+the distinction is worth writing down because the log will keep looking
+like this.
+
+The transform is `c = (c == 'A') ? 'B' : 'A'` per character. It does not
+map everything to one symbol: every character that was not `A` becomes
+`A`, and every character that *was* `A` becomes `B`. Since a base64
+character is `A` about one time in 64, the result is mostly `A` **by
+construction**, with a `B` wherever the original had one.
+
+What matters is the property, and it holds: *every position differs from
+its original*, so the tail as a whole cannot coincide with the valid
+one — which a constant filler could, in principle. Checked on the host
+against a realistic tail, an all-`A` tail (which becomes all-`B`) and an
+alternating one: zero positions unchanged in every case. The all-`A`
+decode is 36 zero bytes — structurally valid base64 of the right length,
+so the server rejects it by comparison, not by failing to parse it.
+That, too, is required: a rejection at a parse step would be the wrong
+reason again.
 
 #### The way this test could pass while proving nothing
 
