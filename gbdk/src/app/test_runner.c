@@ -55,6 +55,10 @@ static const char kCode31002[] = "31-002";
 static const char kCode32000[] = "32-000";
 static const char kCode32401[] = "32-401";
 
+/* Two call sites (SMALL BUFFER's upload leg, the conformance test) and
+ * one meaning: a 401 that carries no Gb-Status judged nothing. */
+static const char kMsgChallengeExpired[] = "CHALLENGE EXPIRED";
+
 /* Shared between test_isp_email_send() (which writes this exact header
  * line into the test message) and delete_matching_test_emails() (which
  * scans POP3 headers for it) -- the two must never drift apart, since
@@ -995,10 +999,31 @@ static bool bb_session_prologue(magb_context_t *ctx, test_result_t *out,
  * doAuth(1) and doAuth(2) issue the same challenge and both return the
  * content on the authenticated GET. Only the upload side differs, and
  * that is each caller's own business. */
-static bool bb_download_verified(magb_context_t *ctx, test_result_t *out,
-                                  const uint8_t *host_ip, const char *path,
-                                  const char *login, const char *password,
-                                  gb00_stream_result_t *res)
+/* GET `path`, answer the 401 with GB00 auth, GET again on a fresh
+ * connection, and leave the result in *res / s_bb_status.
+ *
+ * `corrupt` replaces everything past the Authorization's
+ * GB00_AUTH_PREFIX_LEN-character prefix before the second GET. The
+ * caller that passes true wants the server to REJECT the result --
+ * see test_srv_auth_prefix(). Every other caller passes false and this
+ * behaves exactly as it always did.
+ *
+ * Reports and tears the session down on a transport failure; returns
+ * false if the caller should stop. An HTTP-level rejection is NOT a
+ * failure here: it is the outcome, and judging it belongs to the
+ * caller, which is why this returns true for any status it managed to
+ * read. s_bb_did_auth says whether a challenge actually happened.
+ *
+ * Factored out of bb_download_verified() when the conformance test
+ * arrived and its copy of this exact sequence overflowed the ROM by
+ * ~500 bytes: SDCC pools no string literals, so a second copy of the
+ * two request formats and the failure messages cost more than the
+ * whole test did. One copy is also one place for the "REON needs a
+ * fresh connection for the authenticated retry" rule to live. */
+static bool bb_auth_get(magb_context_t *ctx, test_result_t *out,
+                         const uint8_t *host_ip, const char *path,
+                         const char *login, const char *password,
+                         bool corrupt, gb00_stream_result_t *res)
 {
     magb_result_t r;
     uint8_t conn_id;
@@ -1021,6 +1046,26 @@ static bool bb_download_verified(magb_context_t *ctx, test_result_t *out,
             return false;
         }
         s_bb_did_auth = true;
+
+        if (corrupt) {
+            /* Keep the prefix, destroy the rest. Flipping each
+             * character between 'A' and 'B' guarantees every one of
+             * them changes -- a fixed filler could in principle
+             * coincide with the real tail, and a "negative" test that
+             * silently sent a VALID credential would pass while
+             * proving the opposite of what it claims. Both are base64
+             * characters, so the value still decodes; it decodes to
+             * the wrong bytes. The length is unchanged, so what the
+             * server sees is well-formed in every respect except the
+             * credential itself. */
+            uint8_t i;
+            for (i = 0U; i < (uint8_t)(GB00_AUTHORIZATION_LEN - GB00_AUTH_PREFIX_LEN); i++) {
+                char *c = &s_bb_auth_header[(sizeof(BB_AUTH_HEADER_PREFIX) - 1U)
+                                            + GB00_AUTH_PREFIX_LEN + i];
+                *c = (*c == 'A') ? 'B' : 'A';
+            }
+        }
+
         (void)magb_tcp_close(ctx, conn_id);
         r = magb_tcp_open(ctx, host_ip, TEST_HTTP_PORT, &conn_id);
         if (r != MAGB_OK) { result_fail_code(out, r, "TCP REOPEN FAIL", kCode24000); isp_http_cleanup(ctx, 0U, false, true); return false; }
@@ -1031,12 +1076,41 @@ static bool bb_download_verified(magb_context_t *ctx, test_result_t *out,
         if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return false; }
     }
     (void)magb_tcp_close(ctx, conn_id);
+    return true;
+}
+
+/* True if a 401 carries `Gb-Status:`, i.e. the server actually
+ * evaluated the credential and rejected it, rather than answering with
+ * a fresh challenge because the old one was gone. REON's own source
+ * makes these mutually exclusive (both branches header_remove() first),
+ * so one test settles it. Shared by SMALL BUFFER's upload leg and the
+ * conformance test -- the classification is the same fact in both.
+ *
+ * Leaves the value in s_bb_auth_id for whoever wants to display it. */
+static bool bb_401_has_gb_status(uint16_t head_len)
+{
+    return gb00_find_header_token(s_gb00_resp, head_len, "Gb-Status:",
+                                   s_bb_auth_id, sizeof(s_bb_auth_id));
+}
+
+static bool bb_download_verified(magb_context_t *ctx, test_result_t *out,
+                                  const uint8_t *host_ip, const char *path,
+                                  const char *login, const char *password,
+                                  gb00_stream_result_t *res)
+{
+    if (!bb_auth_get(ctx, out, host_ip, path, login, password, false, res)) {
+        return false;
+    }
 
     if (!res->checksum_present || res->computed_checksum != res->expected_checksum) {
-        sprintf(out->detail[0], "%hx%hx!=%hx%hx",
+        /* After result_fail(), not before: it writes detail[0] itself,
+         * so the numbers used to be overwritten before anything could
+         * display them -- the failure said "DL CHECKSUM BAD" and threw
+         * away the only line that said what the two checksums were. */
+        result_fail(out, MAGB_ERR_ISP, "DL CHECKSUM BAD");
+        sprintf(out->detail[1], "%hx%hx!=%hx%hx",
                 (uint8_t)(res->computed_checksum >> 8), (uint8_t)(res->computed_checksum & 0xFFU),
                 (uint8_t)(res->expected_checksum >> 8), (uint8_t)(res->expected_checksum & 0xFFU));
-        result_fail(out, MAGB_ERR_ISP, "DL CHECKSUM BAD");
         isp_http_cleanup(ctx, 0U, false, true);
         return false;
     }
@@ -1089,8 +1163,10 @@ void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *
     /* Size is part of the contract, not incidental: a short read that
      * happened to checksum correctly would otherwise pass silently. */
     if (res.body_len != TEST_SMALLBUFFER_SIZE) {
-        sprintf(out->detail[0], "GOT %u WANT %u", res.body_len, (uint16_t)TEST_SMALLBUFFER_SIZE);
+        /* detail[1]: result_fail() owns detail[0] -- see the checksum
+         * branch in bb_download_verified() for the same correction. */
         result_fail(out, MAGB_ERR_ISP, "SHORT BODY");
+        sprintf(out->detail[1], "GOT %u WANT %u", res.body_len, (uint16_t)TEST_SMALLBUFFER_SIZE);
         isp_http_cleanup(ctx, 0U, false, true);
         return;
     }
@@ -1192,11 +1268,10 @@ void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *
      * was not an outcome the server could report. See
      * docs/protocol-notes.md. */
     if (strncmp(s_bb_status, "401", 3) == 0) {
-        if (gb00_find_header_token(s_gb00_resp, res.head_len, "Gb-Status:",
-                                    s_bb_auth_id, sizeof(s_bb_auth_id))) {
+        if (bb_401_has_gb_status(res.head_len)) {
             result_fail(out, MAGB_ERR_ISP, "AUTH REJECTED (201)");
         } else {
-            result_fail(out, MAGB_ERR_ISP, "CHALLENGE EXPIRED");
+            result_fail(out, MAGB_ERR_ISP, kMsgChallengeExpired);
         }
         return;
     }
@@ -1219,6 +1294,78 @@ void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *
     out->result = MAGB_OK;
     sprintf(out->detail[1], "UP OK REUSED AUTH");
     sprintf(out->official_code, "32-%s", s_bb_status);
+}
+
+/* ---- Server conformance: the prefix of an Authorization must not be
+ * enough to authenticate --------------------------------------------
+ *
+ * See test_runner.h for what this proves and why it lives in its own
+ * menu section rather than among the adapter tests. In short: the
+ * first GB00_AUTH_PREFIX_LEN characters are an echo of the server's
+ * own challenge, so a server that checks only those authenticates
+ * anyone who can read a 401.
+ *
+ * Reuses SMALL BUFFER's endpoint on purpose -- that is the doAuth(2)
+ * path whose 15-minute cache held the bypass, so this exercises the
+ * fixed code and not a neighbour of it. */
+void test_srv_auth_prefix(magb_context_t *ctx, test_result_t *out, const char *password)
+{
+    magb_isp_identity_t id;
+    uint8_t host_ip[4];
+    gb00_stream_result_t res;
+
+    if (!bb_session_prologue(ctx, out, password, &id, host_ip)) { return; }
+
+    if (!bb_auth_get(ctx, out, host_ip, TEST_HTTP_SMALLBUFFER_PATH,
+                      id.login, password, true, &res)) {
+        return;
+    }
+    isp_http_cleanup(ctx, 0U, false, true);
+
+    /* No challenge means nothing was tested: the endpoint answered
+     * without ever asking us to authenticate, so no credential was
+     * offered and none was judged. Not a pass. */
+    if (strncmp(s_bb_status, "401", 3) != 0) {
+        /* Two different facts share this branch, and the flag tells
+         * them apart. If a challenge happened, the server accepted a
+         * credential it should have refused -- the bypass. If none
+         * happened, the endpoint never asked us to authenticate at
+         * all, so nothing was tested: a fixture problem, not a
+         * security finding, and calling it one would be a false alarm.
+         *
+         * (A 401 with no parseable challenge cannot reach here --
+         * bb_auth_get() already fails with NO WWW-AUTH HDR. So a 401
+         * at this point always means s_bb_did_auth is set.)
+         *
+         * detail[1], not detail[0]: result_fail() writes detail[0]
+         * itself, so anything put there first is overwritten before it
+         * can be read. */
+        result_fail(out, MAGB_ERR_ISP, s_bb_did_auth ? "BYPASS OPEN" : "NO CHALLENGE");
+        sprintf(out->detail[1], "HTTP %s", s_bb_status);
+        return;
+    }
+
+    /* Which 401 this is decides whether anything was actually judged.
+     * Gb-Status present = full validation ran and said no. Absent =
+     * the challenge was gone, so the credential was never examined --
+     * not a pass, and not a failure of the server either. */
+    if (!bb_401_has_gb_status(res.head_len)) {
+        result_fail(out, MAGB_ERR_ISP, kMsgChallengeExpired);
+        return;
+    }
+
+    /* PASS. detail[0] carries the Gb-Status value rather than a fixed
+     * "rejected" string: 201 is the server's own verdict code, and
+     * printing it means a future server that answers some other code
+     * is visible instead of being flattened into the same PASS.
+     *
+     * No official_code: those are Mobile Adapter *error* codes, and
+     * this outcome is a success. The passing tests that do set one are
+     * reporting an HTTP status worth seeing; here the status is 401 by
+     * definition, so it would say nothing. */
+    out->passed = true;
+    out->result = MAGB_OK;
+    sprintf(out->detail[0], "GB-ST %s", s_bb_auth_id);
 }
 
 void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *password)

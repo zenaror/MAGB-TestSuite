@@ -141,6 +141,33 @@ all of it. This runs against a real mailbox; a test that removed
 everything it found would delete real mail. `DELE` only marks — the
 `QUIT` commits — so a failure partway through leaves the mailbox alone.
 
+### Server conformance (SERVER CONF)
+
+Its own main-menu entry, on purpose. Every test above passes when the
+adapter, libmobile and the link behave; this one passes when the
+**server** is correctly configured, and can fail while the adapter is
+perfect. Keeping it out of the ISP/HTTP list is what stops a red result
+from being ambiguous about which side is broken.
+
+One test today, **AUTH PREFIX**. It builds a valid GB00 `Authorization`,
+keeps the 44-character prefix (which is only an echo of the challenge
+the server itself published), replaces the rest, and requires a refusal:
+
+| what you see | what it means |
+| --- | --- |
+| `PASS`, `GB-ST 201` | the server validated the whole credential and rejected it |
+| `FAIL BYPASS OPEN` + `HTTP 200` | this server accepts a prefix-only credential — the bypass is open |
+| `FAIL CHALLENGE EXPIRED` | inconclusive, not a pass: the challenge was gone, so nothing judged the credential. Just run it again |
+| `FAIL NO CHALLENGE` | the endpoint served without asking for auth — a fixture problem, not a security finding |
+
+Needs the ISP password set, like the other authenticating tests: a
+*valid* Authorization has to exist before it can be damaged, or the
+request would be refused for a reason unrelated to the prefix.
+
+**Not yet runtime-verified on either ROM.** It compiles clean and
+mirrors the reproduction the REON maintainer ran by hand, but neither
+build has executed it against the live server yet.
+
 ### Read Configuration
 
 Run **Read Config** from the main menu. Against a freshly-initialized
