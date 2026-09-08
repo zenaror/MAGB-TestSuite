@@ -722,7 +722,7 @@ static uint16_t gb00_find_body_start(const uint8_t *resp, uint16_t resp_len)
     return 0xFFFFU;
 }
 
-/* Shared engine behind gb00_stream_request()/gb00_stream_recv() below:
+/* Shared engine behind gb00_stream_request() below:
  * assumes `res->head_len` bytes are ALREADY sitting in s_gb00_resp
  * (from whatever got the connection to this point) and `remote_closed`
  * reflects the connection's state as of that same read. Keeps polling
@@ -838,18 +838,6 @@ static magb_result_t gb00_stream_request(magb_context_t *ctx, uint8_t conn_id,
     return gb00_stream_continue(ctx, conn_id, remote_closed, status, res, fail_stage);
 }
 
-/* Like gb00_stream_request(), but for when the request itself was
- * already sent in full by the caller (tcp_send_raw(), possibly across
- * many calls -- the upload leg's multi-chunk body) and all that's left
- * is to poll for and stream the response. */
-static magb_result_t gb00_stream_recv(magb_context_t *ctx, uint8_t conn_id,
-                                       char status[4], gb00_stream_result_t *res,
-                                       const char **fail_stage)
-{
-    res->head_len = 0U;
-    return gb00_stream_continue(ctx, conn_id, false, status, res, fail_stage);
-}
-
 /* Shared failure path for test_isp_big_buffer() below, once a
  * connection is open and login has already succeeded: report the
  * failure, close the connection, then the usual best-effort ISP
@@ -865,6 +853,22 @@ static void bb_fail(magb_context_t *ctx, test_result_t *out, magb_result_t r,
     isp_http_cleanup(ctx, 0U, false, true);
 }
 
+/* Sized from the literals, not by hand. It was 16 + 92 + 4 = 112, and
+ * the header it holds is 26 + 92 + 3 + NUL = 122: the "16" was a guess
+ * at the length of "Authorization: GB00 name=\"", which is 26.
+ *
+ * The ten-byte overflow ran into s_bb_auth_id below. Harmless for BIG
+ * BUFFER, which is done with this header before it reads Gb-Auth-ID --
+ * but SMALL BUFFER reads X-Test-User into that buffer BETWEEN building
+ * this header and sending it, so the wire showed an Authorization value
+ * truncated mid-base64 with the user id ("34") pasted over its closing
+ * quote and CRLF. The header line then never terminated, Content-Length
+ * was swallowed into it, and the server saw a body-less request. */
+#define BB_AUTH_HEADER_PREFIX "Authorization: GB00 name=\""
+#define BB_AUTH_HEADER_SUFFIX "\"\r\n"
+#define BB_AUTH_HEADER_SIZE ((sizeof(BB_AUTH_HEADER_PREFIX) - 1U) \
+                             + GB00_AUTHORIZATION_LEN \
+                             + sizeof(BB_AUTH_HEADER_SUFFIX))
 /* Shared "we got a 401, now build the Authorization header" step --
  * used identically by both the download and upload legs below. */
 static bool bb_challenge_auth(uint16_t head_len, const char *login, const char *password,
@@ -877,7 +881,22 @@ static bool bb_challenge_auth(uint16_t head_len, const char *login, const char *
         return false;
     }
     gb00_build_authorization(challenge, login, password, auth_value);
-    sprintf(auth_header, "Authorization: GB00 name=\"%s\"\r\n", auth_value);
+    {
+        char *p = magb_fmt_str(auth_header, BB_AUTH_HEADER_PREFIX);
+        p = magb_fmt_str(p, auth_value);
+        p = magb_fmt_str(p, BB_AUTH_HEADER_SUFFIX);
+        *p = '\0';
+    }
+    /* Compile-time proof the buffer holds what we just wrote --
+     * auth_value is always exactly GB00_AUTHORIZATION_LEN characters
+     * (gb00_build_authorization()'s contract), so the total is fixed. */
+    {
+        typedef char bb_auth_header_fits[
+            (BB_AUTH_HEADER_SIZE >= (sizeof(BB_AUTH_HEADER_PREFIX) - 1U)
+                                    + GB00_AUTHORIZATION_LEN
+                                    + sizeof(BB_AUTH_HEADER_SUFFIX)) ? 1 : -1];
+        (void)sizeof(bb_auth_header_fits);
+    }
     return true;
 }
 
@@ -887,7 +906,7 @@ static bool bb_challenge_auth(uint16_t head_len, const char *login, const char *
  * identical, so it lives here once. These buffers are file-scope
  * statics rather than function statics for the same reason: one copy,
  * not two, on a ROM with a few hundred bytes to spare. */
-static char s_bb_auth_header[16U + GB00_AUTHORIZATION_LEN + 4U];
+static char s_bb_auth_header[BB_AUTH_HEADER_SIZE];
 /* REON's session id is bin2hex(random_bytes(16)) = 32 characters today;
  * sized past that because nothing documents it as fixed, and
  * gb00_find_header_token() refuses rather than truncates if it ever
@@ -1094,10 +1113,22 @@ void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *
     for (i = 0U; i < (uint8_t)TEST_SMALLBUFFER_SIZE; i++) {
         s_bb_chunk[i] = i;
     }
-    r = tcp_send_raw(ctx, conn_id, s_bb_chunk, (uint8_t)TEST_SMALLBUFFER_SIZE);
-    if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD BODY SEND FAIL", conn_id); return; }
-
-    r = gb00_stream_recv(ctx, conn_id, s_bb_status, &res, &fail_stage);
+    /* The LAST send of a body must also receive.
+     *
+     * On this protocol one Transfer Data both sends and receives, so a
+     * server quick enough -- a small body to a server on the same
+     * machine -- has its whole response arrive bundled with the very
+     * send that completed the request. A send that discards its output
+     * loses that response entirely, and the poll afterwards finds only
+     * Transfer Data End: the test then reports "NO HTTP/ PREFIX" for a
+     * request the server answered correctly. (Same bug tcp_send_line()
+     * had for the email tests.)
+     *
+     * gb00_stream_request() already does exactly the right thing --
+     * send, receive into s_gb00_resp, then stream -- so the final chunk
+     * goes through it rather than through tcp_send_raw(). */
+    r = gb00_stream_request(ctx, conn_id, s_bb_chunk, (uint16_t)TEST_SMALLBUFFER_SIZE,
+                             s_bb_status, &res, &fail_stage);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
     (void)magb_tcp_close(ctx, conn_id);
     isp_http_cleanup(ctx, 0U, false, true);
@@ -1241,13 +1272,30 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
         for (i = 0U; i < chunk_len; i++) {
             s_bb_chunk[i] = (uint8_t)((sent + i) & 0xFFU);
         }
-        r = tcp_send_raw(ctx, conn_id, s_bb_chunk, chunk_len);
-        if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD BODY SEND FAIL", conn_id); return; }
         sent = (uint16_t)(sent + chunk_len);
+        if (sent >= TEST_BIGBUFFER_SIZE) {
+        /* The LAST send of a body must also receive.
+         *
+         * On this protocol one Transfer Data both sends and receives, so a
+         * server quick enough -- a small body to a server on the same
+         * machine -- has its whole response arrive bundled with the very
+         * send that completed the request. A send that discards its output
+         * loses that response entirely, and the poll afterwards finds only
+         * Transfer Data End: the test then reports "NO HTTP/ PREFIX" for a
+         * request the server answered correctly. (Same bug tcp_send_line()
+         * had for the email tests.)
+         *
+         * gb00_stream_request() already does exactly the right thing --
+         * send, receive into s_gb00_resp, then stream -- so the final chunk
+         * goes through it rather than through tcp_send_raw(). */
+            r = gb00_stream_request(ctx, conn_id, s_bb_chunk, (uint16_t)chunk_len,
+                                     s_bb_status, &res, &fail_stage);
+            if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
+        } else {
+            r = tcp_send_raw(ctx, conn_id, s_bb_chunk, chunk_len);
+            if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD BODY SEND FAIL", conn_id); return; }
+        }
     }
-
-    r = gb00_stream_recv(ctx, conn_id, s_bb_status, &res, &fail_stage);
-    if (r != MAGB_OK) { bb_fail(ctx, out, r, fail_stage, conn_id); return; }
     (void)magb_tcp_close(ctx, conn_id);
     isp_http_cleanup(ctx, 0U, false, true);
 
