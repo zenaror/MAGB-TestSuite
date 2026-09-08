@@ -586,14 +586,52 @@ typedef struct {
  * tcp_send_line()'s own history in this file): REON's PHP always waits
  * for the full Content-Length body before responding, so nothing
  * meaningful can arrive bundled with one of these intermediate sends. */
+/* Bytes the server sent back WHILE we were still sending, accumulated
+ * in s_gb00_resp. Reset by bb_send_begin() before each request.
+ *
+ * These sends used to discard whatever came back, on the reasoning that
+ * an HTTP/1.0 server does not reply mid-request. That is true of the
+ * reply's *timing* but not of its *framing*: one Transfer Data both
+ * sends and receives, so when the server answers quickly enough -- a
+ * 128-byte body to a server on the same machine -- its whole response
+ * arrives bundled with the very send that completed the request, and
+ * dropping it loses the response entirely. The poll that follows then
+ * finds only Transfer Data End and the test reports "NO HTTP/ PREFIX"
+ * for a request the server answered correctly.
+ *
+ * This is the same bug tcp_send_line() had for the email tests, and the
+ * same fix: keep what arrived instead of throwing it away. BIG BUFFER
+ * hid it by sending 8 KiB across ~33 calls, so the reply always landed
+ * in a later poll. */
+static uint16_t s_bb_pending_len;
+static bool s_bb_pending_closed;
+
+static void bb_send_begin(void)
+{
+    s_bb_pending_len = 0U;
+    s_bb_pending_closed = false;
+}
+
 static magb_result_t tcp_send_raw(magb_context_t *ctx, uint8_t conn_id,
                                    const uint8_t *data, uint8_t len)
 {
-    uint8_t discard[1];
     uint8_t got_len;
-    bool remote_closed;
-    return magb_transfer_data(ctx, conn_id, data, len, discard, 0U,
-                               &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
+    bool remote_closed = false;
+    magb_result_t r;
+    uint16_t room = (s_bb_pending_len < GB00_RESP_BUF_SIZE)
+                     ? (uint16_t)(GB00_RESP_BUF_SIZE - s_bb_pending_len) : 0U;
+    uint8_t cap = (room > 255U) ? 255U : (uint8_t)room;
+
+    r = magb_transfer_data(ctx, conn_id, data, len,
+                            &s_gb00_resp[s_bb_pending_len], cap,
+                            &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
+    if (r == MAGB_OK) {
+        s_bb_pending_len = (uint16_t)(s_bb_pending_len + got_len);
+        if (remote_closed) {
+            s_bb_pending_closed = true;
+        }
+    }
+    return r;
 }
 
 /* tcp_send_raw() for anything that can exceed one Transfer Data payload,
@@ -824,6 +862,7 @@ static magb_result_t gb00_stream_request(magb_context_t *ctx, uint8_t conn_id,
      * exactly what happened on the upload leg -- see tcp_send_all()).
      * Everything but the final chunk goes out send-only; the last one
      * carries the receive so the response still lands in s_gb00_resp. */
+    bb_send_begin();
     if (req_len > TEST_BIGBUFFER_UPLOAD_CHUNK) {
         head_sent = (uint16_t)(req_len - TEST_BIGBUFFER_UPLOAD_CHUNK);
         r = tcp_send_all(ctx, conn_id, req, head_sent);
@@ -831,10 +870,22 @@ static magb_result_t gb00_stream_request(magb_context_t *ctx, uint8_t conn_id,
     }
     last_len = (uint8_t)(req_len - head_sent);
 
-    r = magb_transfer_data(ctx, conn_id, &req[head_sent], last_len, s_gb00_resp, 255U,
-                            &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
+    /* Receive AFTER whatever tcp_send_all() already accumulated -- it
+     * shares s_gb00_resp with us now (see tcp_send_raw()), so starting
+     * at offset 0 here would overwrite a reply that arrived during the
+     * earlier chunks. */
+    {
+        uint16_t room = (s_bb_pending_len < GB00_RESP_BUF_SIZE)
+                         ? (uint16_t)(GB00_RESP_BUF_SIZE - s_bb_pending_len) : 0U;
+        uint8_t cap = (room > 255U) ? 255U : (uint8_t)room;
+
+        r = magb_transfer_data(ctx, conn_id, &req[head_sent], last_len,
+                                &s_gb00_resp[s_bb_pending_len], cap,
+                                &got_len, &remote_closed, MAGB_TIMEOUT_FRAMES_LONG);
+    }
     if (r != MAGB_OK) { *fail_stage = "HTTP SEND FAIL"; return r; }
-    res->head_len = got_len;
+    res->head_len = (uint16_t)(s_bb_pending_len + got_len);
+    if (s_bb_pending_closed) { remote_closed = true; }
     return gb00_stream_continue(ctx, conn_id, remote_closed, status, res, fail_stage);
 }
 
@@ -846,8 +897,10 @@ static magb_result_t gb00_stream_recv(magb_context_t *ctx, uint8_t conn_id,
                                        char status[4], gb00_stream_result_t *res,
                                        const char **fail_stage)
 {
-    res->head_len = 0U;
-    return gb00_stream_continue(ctx, conn_id, false, status, res, fail_stage);
+    /* Start from whatever arrived bundled with the sends -- see
+     * tcp_send_raw(). Zero here would throw the response away again. */
+    res->head_len = s_bb_pending_len;
+    return gb00_stream_continue(ctx, conn_id, s_bb_pending_closed, status, res, fail_stage);
 }
 
 /* Shared failure path for test_isp_big_buffer() below, once a
@@ -865,6 +918,24 @@ static void bb_fail(magb_context_t *ctx, test_result_t *out, magb_result_t r,
     isp_http_cleanup(ctx, 0U, false, true);
 }
 
+/* Sized from the literals rather than by hand. It was 16 + 92 + 4 =
+ * 112, and the header it holds is 26 + 92 + 3 + NUL = 122: the "16"
+ * was a guess at the length of "Authorization: GB00 name=\"", which is
+ * actually 26. The ten-byte overflow ran straight into s_bb_auth_id
+ * below, so SMALL BUFFER -- which reads X-Test-User into that buffer
+ * BETWEEN building this header and sending it -- transmitted an
+ * Authorization value truncated mid-base64 with the user id ("34")
+ * pasted over its closing quote and CRLF. The header line then never
+ * terminated, Content-Length was swallowed into it, and the server saw
+ * a body-less request. BIG BUFFER never noticed because it finishes
+ * with this header before it touches s_bb_auth_id.
+ *
+ * Derived and asserted so it cannot drift again. */
+#define BB_AUTH_HEADER_PREFIX "Authorization: GB00 name=\""
+#define BB_AUTH_HEADER_SUFFIX "\"\r\n"
+#define BB_AUTH_HEADER_SIZE ((sizeof(BB_AUTH_HEADER_PREFIX) - 1U) \
+                             + GB00_AUTHORIZATION_LEN \
+                             + sizeof(BB_AUTH_HEADER_SUFFIX))
 /* Shared "we got a 401, now build the Authorization header" step --
  * used identically by both the download and upload legs below. */
 static bool bb_challenge_auth(uint16_t head_len, const char *login, const char *password,
@@ -877,7 +948,23 @@ static bool bb_challenge_auth(uint16_t head_len, const char *login, const char *
         return false;
     }
     gb00_build_authorization(challenge, login, password, auth_value);
-    sprintf(auth_header, "Authorization: GB00 name=\"%s\"\r\n", auth_value);
+    {
+        char *p = magb_fmt_str(auth_header, BB_AUTH_HEADER_PREFIX);
+        p = magb_fmt_str(p, auth_value);
+        p = magb_fmt_str(p, BB_AUTH_HEADER_SUFFIX);
+        *p = '\0';
+        /* Compile-time proof that the buffer holds what we just wrote.
+         * `auth_value` is always exactly GB00_AUTHORIZATION_LEN
+         * characters (gb00_build_authorization()'s contract), so the
+         * total is fixed and checkable. */
+        {
+            typedef char bb_auth_header_fits[
+                (BB_AUTH_HEADER_SIZE >= (sizeof(BB_AUTH_HEADER_PREFIX) - 1U)
+                                        + GB00_AUTHORIZATION_LEN
+                                        + sizeof(BB_AUTH_HEADER_SUFFIX)) ? 1 : -1];
+            (void)sizeof(bb_auth_header_fits);
+        }
+    }
     return true;
 }
 
@@ -887,7 +974,7 @@ static bool bb_challenge_auth(uint16_t head_len, const char *login, const char *
  * identical, so it lives here once. These buffers are file-scope
  * statics rather than function statics for the same reason: one copy,
  * not two, on a ROM with a few hundred bytes to spare. */
-static char s_bb_auth_header[16U + GB00_AUTHORIZATION_LEN + 4U];
+static char s_bb_auth_header[BB_AUTH_HEADER_SIZE];
 /* REON's session id is bin2hex(random_bytes(16)) = 32 characters today;
  * sized past that because nothing documents it as fixed, and
  * gb00_find_header_token() refuses rather than truncates if it ever
@@ -1087,6 +1174,7 @@ void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *
         *p = '\0';
         req_len = (uint16_t)(p - s_bb_req);
     }
+    bb_send_begin();
     /* Exceeds one Transfer Data payload -- see tcp_send_all(). */
     r = tcp_send_all(ctx, conn_id, (const uint8_t *)s_bb_req, req_len);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD HDR SEND FAIL", conn_id); return; }
@@ -1228,6 +1316,7 @@ void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *pa
         *p = '\0';
         req_len = (uint16_t)(p - s_bb_req);
     }
+    bb_send_begin();
     /* Can exceed one Transfer Data payload -- see tcp_send_all(). */
     r = tcp_send_all(ctx, conn_id, (const uint8_t *)s_bb_req, req_len);
     if (r != MAGB_OK) { bb_fail(ctx, out, r, "UPLD HDR SEND FAIL", conn_id); return; }
