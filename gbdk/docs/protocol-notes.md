@@ -1399,24 +1399,48 @@ in the same period — SMALL BUFFER sends the *undamaged* value from the
 same builder and gets a 200, which is what says the builder and the
 offsets are right. Neither is an independent check inside this test.
 
-Two ways to close it, neither done yet:
+Two ways to close it:
 
-1. **Server-side, one line.** REON logs the last 12 characters of an
-   `Authorization` deliberately, so the prefix never reaches the log;
-   the maintainer offered to log instead a boolean — does the
-   44-character prefix match the challenge this session issued — which
-   proves the missing half without recording any credential. Asked for;
-   pending on their side.
-2. **Client-side, one extra request.** Send the valid Authorization
-   first and require 200, then the damaged one and require 401, in the
-   same session. That is self-proving with no server help, and it is
-   what the test should eventually do. It costs one more request and
-   about 60-80 bytes the GBDK build does not currently have (see the
-   Makefile: 23 bytes free below `0x8000`).
+1. **Server-side — done, REON `224b47c`.** REON logs only the last 12
+   characters of an `Authorization` deliberately, so the prefix never
+   reaches the log. Instead it now logs a boolean per request: does the
+   44-character prefix correspond to a challenge this server issued?
+   `auth.php` already derives the PHP session id from exactly those 44
+   characters, so the existence of that session file answers the
+   question without storing or comparing any value. Three outcomes:
+   matches; no challenge with that id; the 44 characters don't decode to
+   32 bytes at all.
+2. **Client-side, one extra request — not done.** Send the valid
+   Authorization first and require 200, then the damaged one and require
+   401, in the same session. Self-proving, needs no server help, and it
+   is where this test should end up. It costs one more request and about
+   60-80 bytes the GBDK build does not have (see the Makefile: 23 bytes
+   free below `0x8000`). When that happens the server-side boolean
+   becomes redundant, which is the right fate for instrumentation.
 
-Until one of those exists, read a PASS as "this server rejected a
-credential whose tail was wrong", and rely on SMALL BUFFER's own PASS
-for "and the prefix was right".
+**The verification is the interesting part.** The maintainer ran all
+three cases against the live server, and *all three answered an
+identical `401`*:
+
+| what was sent | HTTP | prefix boolean |
+| --- | --- | --- |
+| correct prefix, wrong tail | 401 | matches |
+| prefix with one byte changed | 401 | no challenge with that id |
+| prefix that doesn't decode to 32 bytes | 401 | doesn't decode |
+
+The middle row is the realistic one, and the reason this mattered: a
+wrong offset would produce still-valid base64 of the right length that
+simply isn't the challenge. From the ROM's side those three are
+indistinguishable — same status, same `Gb-Status`. **A negative test
+cannot tell "rejected for the reason I intended" from "rejected for a
+reason I caused" using only the response**, unless something outside the
+response says which. That is the general lesson, not a REON detail:
+when you assert that a server refuses something, make sure you can also
+show it refused it for your reason.
+
+Until the client-side version exists, read a PASS as "this server
+rejected a credential whose tail was wrong" plus, from the server log,
+"and the prefix was genuinely a challenge it issued".
 
 ### The three kinds of 401
 

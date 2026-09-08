@@ -164,14 +164,18 @@ Needs the ISP password set, like the other authenticating tests: a
 *valid* Authorization has to exist before it can be damaged, or the
 request would be refused for a reason unrelated to the prefix.
 
-**Run SMALL BUFFER in the same session.** A PASS here says the server
-rejected a credential whose *tail* was wrong. That the *prefix* was
-right is currently guaranteed by construction, not checked — and if it
-were ever wrong, this test would still report PASS while never
-exercising the case the fix is about. SMALL BUFFER sends the undamaged
-value from the same builder and needs a 200 to pass, so its PASS is what
-covers the other half today. See `docs/protocol-notes.md`, "The way this
-test could pass while proving nothing".
+**A PASS on its own is half the claim — check the server log too.** It
+says the server rejected a credential whose *tail* was wrong. That the
+*prefix* was right is guaranteed by construction, not by anything this
+ROM can observe: a wrong offset would be rejected identically, and the
+test would still say PASS while never exercising the case the fix is
+about. REON logs a per-request boolean for exactly this (does the
+44-character prefix correspond to a challenge it issued); the run counts
+when that says it matched. Running SMALL BUFFER in the same session
+covers the same ground from this side, since it sends the undamaged
+value from the same builder and needs a 200. See
+`docs/protocol-notes.md`, "The way this test could pass while proving
+nothing".
 
 **Not yet runtime-verified on either ROM.** It compiles clean and
 mirrors the reproduction the REON maintainer ran by hand, but neither

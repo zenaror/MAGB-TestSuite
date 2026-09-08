@@ -1654,7 +1654,13 @@ construction here (`Gb00BuildAuthorization` builds the whole value from
 the real challenge, then bytes 44..91 are overwritten in place), and
 SMALL BUFFER's own PASS covers it indirectly by sending the undamaged
 value from the same builder. Neither is an independent check inside this
-test. See `gbdk/docs/protocol-notes.md` for the two ways to close it.
+test. REON now logs a per-request boolean that closes it from the server
+side (`224b47c`); the self-proving client-side version — valid
+Authorization first requiring 200, then the damaged one requiring 401 —
+is the better answer and is what this should become if the GBDK build
+ever gains the ~60-80 bytes it needs. See
+`gbdk/docs/protocol-notes.md` for the verification that showed all three
+failure shapes answer an identical 401.
 
 **Not runtime-verified.** Both ROMs build clean and the logic mirrors
 the reproduction the REON maintainer ran by hand, but neither has
