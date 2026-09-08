@@ -1368,3 +1368,49 @@ A negative test — deliberately send a prefix-only Authorization and
 require a 401 — would pin this as a regression test for any
 REON-compatible server. Not implemented; it is a real change in what the
 suite does and belongs to a deliberate decision, not a drive-by.
+
+## REON stores mail subjects capped at 10 characters
+
+Observed on the wire, not documented anywhere, and it silently broke the
+EMAIL RECV test's cleanup for its entire life.
+
+`TOP n 0` on a mailbox that had accumulated this test's own messages
+returned:
+
+```
+Subject: MAGB Te...
+```
+
+for a message this TestSuite had sent as `Subject: MAGB TestSuite`. Every
+other subject in that mailbox longer than ten characters was cut the same
+way (`Este as...`, `Acentua...`, `Re: Hel...`), while shorter ones
+(`Teste 01`, `Oi`, `Enviado A`) came back intact. So the rule is: ten
+characters, with the last three replaced by `...` when the original was
+longer.
+
+`delete_matching_test_emails()` looked for the full 23-character
+`Subject: MAGB TestSuite` and therefore never matched anything. It had
+never deleted a single message — the mailbox reached twenty accumulated
+test emails before anyone noticed, because "nothing to delete" and
+"nothing matched" printed the same screen.
+
+Two changes, and the split between them matters:
+
+- **What is sent** is now `MAGB TEST`, nine characters, so it fits inside
+  the cap and survives the round trip byte for byte. A test that cannot
+  recognise its own output is not much of a test.
+- **What is matched** is the shorter prefix `Subject: MAGB`, which also
+  recognises the truncated `MAGB Te...` that earlier runs left behind.
+  Without that the test could never clean up the mailbox it filled.
+
+Where the cap is applied, and why, is a server-side question. The obvious
+guess — that ten characters is Mobile Trainer's own subject width — is
+**wrong**: the project owner reports the truncation does not affect
+Mobile Trainer.
+
+The general lesson is worth more than the constant: **a test that
+recognises its own artifacts by an exact string is betting that nothing
+between here and storage rewrites it.** Mail systems rewrite headers
+routinely — folding, re-encoding, capping. Match a prefix you have
+actually seen come back, and prefer sending something short enough that
+there is nothing to rewrite.
