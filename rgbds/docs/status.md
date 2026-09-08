@@ -1305,21 +1305,16 @@ Egg target has a full, real, libmobile-bgb-confirmed PASS; every other
 ISP/HTTP submenu target is new since that PASS and has only been
 verified as far as PyBoy (no real adapter) allows -- see "Manual
 verification status" for exactly what still needs a real
-PicoAdapterGB/BGB+libmobile-bgb run. **Test 3 (P2P) is the one piece of
-this ROM's own named scope that has not been confirmed to PASS at
-all** -- not because anything is missing on this side, but because it
-needs two real linked instances (two Game Boys + two Mobile Adapters,
-or two BGB+libmobile-bgb sessions) to actually prove out, which no
-single manual test session can provide alone. Reasonable next steps,
-roughly in order of value: (1) get a real two-instance P2P Caller/
-Listener PASS -- the one remaining unconfirmed piece of this ROM's core
-scope; (2) work through "Manual verification status"'s backlog of new
-ISP/HTTP submenu targets against a real adapter, one at a time,
-starting with whichever the project owner can test soonest; (3)
-best-effort cleanup on a mid-sequence ISP/HTTP failure, for full parity
-with gbdk's `isp_http_cleanup()`; (4) Write Configuration (`0x1A`); (5)
-showing the exact received HTTP/email byte counts on screen (would need
-a 16-bit-safe `BuildDecimal`, purely cosmetic).
+PicoAdapterGB/BGB+libmobile-bgb run. Test 3 (P2P) was written here as
+"the one piece of this ROM's named scope not confirmed to PASS" for a
+long while, because it needs two real linked instances at once. That
+was stale: the project owner had run it, both roles, and reported it
+only on 2026-09-08 -- see "Manual verification status". Reasonable next
+steps, roughly in order of value: (1) best-effort cleanup on a
+mid-sequence ISP/HTTP failure, for full parity with gbdk's
+`isp_http_cleanup()`; (2) Write Configuration (`0x1A`); (3) showing the
+exact received HTTP/email byte counts on screen (would need a
+16-bit-safe `BuildDecimal`, purely cosmetic).
 
 ## Manual verification status
 
@@ -1351,12 +1346,16 @@ project owner's step):
   server doesn't validate header shape, only the `DATA`/`.`
   terminator sequence, unchanged here), but not yet re-confirmed
   end-to-end through this ROM specifically.
-- **P2P Caller/Listener** is the one piece of this ROM's own named
-  scope (repo-root `CLAUDE.md`) not yet run against a real adapter --
-  needs two real linked instances (two Game Boys + two Mobile Adapters,
-  or two BGB+libmobile-bgb sessions) -- see "Suggested next milestone";
-  the two-simultaneous-setups requirement is why this is still open,
-  not anything known to be wrong on this side.
+- **P2P Caller/Listener: confirmed PASS by the project owner, both
+  roles with `DATA OK`, in a real two-instance run.** Reported on
+  2026-09-08 but run "a long time" before that, ahead of the September
+  device-auth work -- the exact date was not recorded. Not re-run since,
+  and nothing that changed in between touches its path: P2P uses
+  neither GB00 nor the mail authorization gate, and the protocol-layer
+  code it exercises (`MagbDial`/`MagbWaitForCall`/`MagbTransferData`
+  with `MAGB_P2P_CONNECTION_ID`) has not been modified. This entry stood
+  as "not yet run" for weeks after the run had happened; the lesson is
+  on the reporting side, not the code.
 - **Font rendering issue reported during Raw TCP (2026-08-30): some
   letters (e.g. "O") didn't show up.** Root-caused from the report
   alone (specific enough -- Raw TCP only, intermittent characters, not
@@ -1578,6 +1577,8 @@ Every test in both ROMs passes against the real REON server:
 | TRAINER HOME | pass | pass |
 | EMAIL SEND | pass | pass |
 | EMAIL RECV (incl. delete) | pass | pass |
+| P2P CALLER / LISTENER | pass | pass (earlier run, see below) |
+| SERVER CONF: AUTH PREFIX | pass | pass |
 
 The cartridge save was confirmed across a real power cycle on the same
 day, on both ROMs. The one thing with no pass/fail of its own is RAW

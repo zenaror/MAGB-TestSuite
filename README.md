@@ -83,13 +83,14 @@ facts rather than a bug in either one:
   TestSuite reports exactly which stage of the chain failed rather than
   shortcutting.
 
-- P2P Caller/Listener works end-to-end on `gbdk/` against real
-  hardware (PicoAdapterGB), which is also how a real disconnect-detection
-  bug in `libmobile` was found and fixed — see
-  [`gbdk/docs/journal.md`](gbdk/docs/journal.md). The `rgbds/` port of
-  the same test is implemented but has not had its own two-instance run
-  yet; that needs two linked setups at once, which is the only reason
-  it is still open.
+- P2P Caller/Listener works end-to-end on both implementations. On
+  `gbdk/` against real hardware (PicoAdapterGB), which is also how a
+  real disconnect-detection bug in `libmobile` was found and fixed — see
+  [`gbdk/docs/journal.md`](gbdk/docs/journal.md). The `rgbds/` port was
+  confirmed by the project owner in a two-instance run, both roles with
+  `DATA OK`, some time before the device-auth work of September 2026;
+  it has not been re-run since, and nothing that changed touches its
+  path (P2P uses neither GB00 nor the mail authorization gate).
 
 Implementation-specific gaps are listed in that implementation's own
 README.

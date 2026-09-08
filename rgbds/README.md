@@ -98,9 +98,6 @@ alongside it — the protocol reasoning is written once, there.
 
 ## Known limitations
 
-- P2P Caller/Listener is implemented but has not had a two-instance run
-  against a real second instance yet (see "Status" above). `gbdk/`'s
-  equivalent has.
 - No 16-bit-to-decimal formatting routine yet, so HTTP GET does not show
   the exact received byte count the way `gbdk/`'s equivalent screen does
   (`RX TOTAL %u B`) -- a display-only gap, not a protocol one.
