@@ -757,7 +757,7 @@ Configuration Data" above); the password is not (no password field
 exists anywhere in the documented 192-byte layout), so it can't come
 from Read Config no matter what. Originally this used a compile-time
 `TEST_ISP_PASSWORD` constant; per the project owner's explicit request
-("a senha deve ser perguntada para o usuario"), there is now an
+("the password should be asked of the user"), there is now an
 "ISP PASSWORD" main-menu entry (`ui_edit_text()` in `src/app/ui.c`, a
 character-cycling text editor modeled on the existing P2P-number
 digit editor) that edits a session-wide RAM buffer
