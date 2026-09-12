@@ -141,6 +141,18 @@ all of it. This runs against a real mailbox; a test that removed
 everything it found would delete real mail. `DELE` only marks — the
 `QUIT` commits — so a failure partway through leaves the mailbox alone.
 
+**Email Recv sends plain `USER`/`PASS`, on purpose, and this must not
+change.** REON's server started speaking standard APOP on 2026-09-12 —
+that changed nothing a real cartridge sends. libmobile is the layer
+that translates: with a `device_auth_key` provisioned in the adapter's
+`mobile_config.bin`, it answers the `USER` line itself and turns `PASS`
+into a real APOP exchange, invisibly to the game. Without that key it
+forwards the plaintext password as-is, and the server refuses it. If
+this test fails, check the adapter's config for that key (and that it
+was downloaded after 2026-09-12 — the key's offset moved) before
+suspecting the ROM. See `docs/protocol-notes.md`, "Why EMAIL RECV sends
+plain USER/PASS, and always should", for the full mechanism.
+
 ### Server conformance (SERVER CONF)
 
 Its own main-menu entry, on purpose. Every test above passes when the
