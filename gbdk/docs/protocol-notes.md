@@ -1694,3 +1694,67 @@ is itself the note worth keeping: anti-replay rules that treat every
 message the same way get the asymmetry wrong. Granting access and
 withdrawing it do not deserve equal suspicion — the failure modes are
 not symmetric, and the safe default for a revocation is to honour it.
+
+## Why EMAIL RECV sends plain USER/PASS, and always should
+
+Relayed by the REON-server session 2026-09-12, sourced from libmobile's
+own `pop3_auth.c` (`72fac61`) — not verified against that source
+directly from here, but specific enough (exact function names, exact
+queued strings) to record as fact rather than as a claim.
+
+As of 2026-09-12 REON's POP3 server accepts standard APOP, not the
+`XAPOP` extension it used before. This did **not** change what a real
+cartridge sends, and does not change what this ROM should send either.
+The reason is architectural: **the game is immutable and always sends
+the plaintext password.** libmobile is the layer that adapts, invisibly
+to the game:
+
+```c
+case MOBILE_POP3_AUTH_USER:
+    if (p->has_key) {
+        queue_for_game(p, "+OK user accepted\r\n");   /* fake it locally */
+        /* the real USER is never sent to the server at all */
+case MOBILE_POP3_AUTH_PASS:
+    if (p->has_key) {
+        build_apop(...); queue_send(apop);            /* PASS becomes APOP */
+    } else {
+        queue_send(p, line, line_len, ...);            /* forwarded as-is */
+    }
+```
+
+`USER` never reaches the server when a `device_auth_key` is
+provisioned — libmobile answers `+OK user accepted` itself, matching
+the real server's own wording byte-for-byte (a POP3 client that
+doesn't recognize the reply text stops there, so the fake has to be
+exact). `PASS` is replaced with a real APOP challenge-response built
+from that key. The game — real cartridge or this ROM — never sees any
+of this; it just sent `USER <local>` / `PASS <password>` the same way
+it always has.
+
+**This is why `test_isp_email_recv()`'s plain `USER`/`PASS` is correct
+client behavior, not a gap to close.** A version of this ROM that spoke
+APOP directly would stop representing what a cartridge does and start
+testing a code path no cartridge ever exercises — the opposite of what
+a protocol-conformance TestSuite is for. Confirmed as the right call
+before this note existed: asked whether to implement APOP client-side,
+this session flagged it as a protocol change needing sign-off rather
+than just doing it — which is what left room for this correction to
+land before any code changed.
+
+**What actually decides whether EMAIL RECV can pass now:** whether the
+adapter's `mobile_config.bin` has a `device_auth_key` provisioned. No
+key means libmobile forwards the plaintext password unmodified (the
+`else` branch above), and the server refuses it — that failure is an
+**environment/provisioning problem**, not a suite defect, and it's easy
+to mistake for "the suite is testing something outdated" if this note
+isn't read first. Two things that separate the causes without
+guessing, both relayed from the same source:
+
+- `mobile_config.bin` needs to be one downloaded *after* 2026-09-12 —
+  the key moved to offset `0x165`. (`0x160`, quoted earlier from the
+  same source, was wrong and cost the mGBA session real time; corrected
+  here so it isn't repeated.)
+- libmobile's own log distinguishes the two paths directly: `faked
+  local ack` / `PASS seen, sending: APOP ...` means the key was used;
+  `forwarded (no key)` means it wasn't, and a server refusal downstream
+  of that line is expected, not a bug.
