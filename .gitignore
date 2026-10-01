@@ -20,3 +20,6 @@ config.bin
 # see gbdk/docs/protocol-notes.md) used as research material by both
 # implementations. Not part of this repository.
 /references
+
+# OMM local search cache; canonical project memory is in memory/
+.omm/
