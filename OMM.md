@@ -1,24 +1,22 @@
-# Memória do MAGB TestSuite no OMM
+# Memória do MAGB TestSuite na OMM
 
-Este repositório mantém a memória do TestSuite na pasta `memory/`, versionada pelo Git. O OMM registra descobertas e passagens de trabalho; as regras completas continuam nos documentos de cada implementação.
+A memória compartilhada deste projeto fica na **OMM central**. O agente a consulta pelo MCP, no escopo `magb-testsuite`; o escopo `global` guarda o conhecimento de domínio de REON, libmobile e Mobile Adapter GB. O backup da OMM é o repositório de dados `ai-omm-backup`, não este repositório.
 
-## Uso rápido
+Como consultar e quando registrar: veja a seção "Memória" do [`AGENTS.md`](AGENTS.md).
 
-Com o OMM instalado, abra o terminal na pasta do projeto:
+## A pasta `memory/` deste repositório é legado
 
-```sh
-omm search "Mobile Adapter protocolo"
-omm context "DNS e TCP"
-omm remember --kind observation --title "Resultado observado" --content "O que ocorreu e em qual implementação" --source "gbdk/docs/protocol-notes.md" --evidence "gbdk/docs/journal.md: seção relevante"
-omm handoff --status in_progress --summary "Onde o trabalho parou" --next "Próxima ação"
-```
+A pasta `memory/` foi criada em 2026-10-01 por `omm init`, quando a memória ficava dentro de cada projeto. **Não grave nela.** Também não rode `omm remember` ou `omm handoff` nesta pasta: isso criaria uma segunda memória fora da OMM central.
 
-## Limites importantes
+As 4 anotações da pasta foram copiadas para a OMM central em 2026-10-04, no escopo `magb-testsuite`, com o ID original na origem:
 
-- O repositório tem implementações GBDK e RGBDS separadas. Identifique qual delas está em foco antes de alterar ou testar algo.
-- A ROM é um cliente de diagnóstico do protocolo Mobile Adapter GB. Não invente respostas do adaptador nem resultados de rede.
-- Build e verificação estática não provam funcionamento em hardware ou emulador. Registre uma execução real com ambiente e versão antes de afirmar resultado de runtime.
-- Preserve dúvidas de protocolo como dúvidas até que código, documentação ou evidência de execução as resolva.
-- Quando uma tarefa envolver REON, libmobile ou Mobile Adapter GB, use a skill compartilhada `reon-libmobile-expert`, se estiver disponível no agente. Regras e resultados específicos do TestSuite ficam nesta memória e nas fontes locais.
-- O índice em `.omm/` é local e reconstruível com `omm rebuild`; os arquivos de `memory/` são a referência versionada.
+| Anotação | ID na OMM central |
+| --- | --- |
+| Duas implementações | `296ce6d2` |
+| Alvo apenas GBC | `47a7844e` |
+| Build ≠ runtime | `95a408bb` |
+| Preservar incerteza | `8718cdb3` |
 
+Remover a pasta depende de uma decisão do Rafael.
+
+O índice `.omm/` é local, pode ser recriado e fica fora do Git.

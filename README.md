@@ -18,7 +18,7 @@ that protocol, not to play a game:
 It contains no Pokémon (or any other) ROM code, game data, or
 copyrighted assets — a clean-room diagnostic client built from publicly
 documented protocol behavior and reverse-engineered/open references
-(see [`CLAUDE.md`](CLAUDE.md)).
+(see [`AGENTS.md`](AGENTS.md)).
 
 ## What it tests
 
@@ -128,15 +128,18 @@ diagnostic ROM? Each side has an integration guide —
 [`rgbds/docs/integration-guide.md`](rgbds/docs/integration-guide.md).
 
 Each implementation is independently self-contained: its own build,
-its own tests, its own docs. [`CLAUDE.md`](CLAUDE.md) at the repo root
-covers both — the project brief and protocol references apply to
-either, and it states explicitly which parts are GBDK-specific.
+its own tests, its own docs. [`AGENTS.md`](AGENTS.md) at the repo root
+covers both — working rules for contributors and AI agents (in
+Portuguese), and it states explicitly which parts are GBDK-specific.
+The original English project brief it replaced, `CLAUDE.md`, is kept in
+the git history (`git show 607ee05:CLAUDE.md`); code comments that cite
+its sections refer to that text.
 
 ## Repository layout
 
 ```text
 .
-├── CLAUDE.md          project brief and protocol references (both implementations)
+├── AGENTS.md          working rules for contributors and AI agents (both implementations)
 ├── LICENSE
 ├── config.bin         real captured Mobile Adapter config, provisioned locally (see gbdk/docs/testing.md)
 ├── emulador/           shared local emulator working dir, e.g. a BGB install
