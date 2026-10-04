@@ -62,9 +62,10 @@ test cases inline).
 
 ## Architecture
 
-Same three-layer separation as `gbdk/` (see the repo root
-[`CLAUDE.md`](../CLAUDE.md) for the full rationale), mapped to this
-implementation's files:
+Same three-layer separation as `gbdk/` (see
+[`../gbdk/docs/integration-guide.md`](../gbdk/docs/integration-guide.md)
+for the rationale and the repo root [`AGENTS.md`](../AGENTS.md) for the
+rules), mapped to this implementation's files:
 
 ```text
 src/hw/serial.asm           Layer 1: SB/SC only, no protocol knowledge

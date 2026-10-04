@@ -58,8 +58,9 @@ against libmobile's own log. Full protocol rationale for every test
 
 ## Architecture
 
-Three strict layers (see the repo root [`CLAUDE.md`](../CLAUDE.md) for
-the full rationale):
+Three strict layers (see [`docs/integration-guide.md`](docs/integration-guide.md)
+for the rationale and the repo root [`AGENTS.md`](../AGENTS.md) for the
+rules):
 
 ```text
 src/hw/serial_hw.c          Layer 1: SB/SC only -- no protocol, no screen
