@@ -43,6 +43,22 @@ static bool load_fixture(uint8_t out[MAGB_CONFIG_SIZE])
     return n == MAGB_CONFIG_SIZE;
 }
 
+/* 'g' followed by nine decimal digits: the login-ID shape that
+ * docs/dandocs-magb.md documents for the configuration block. */
+static bool login_id_has_documented_shape(const uint8_t *id, uint8_t len)
+{
+    uint8_t i;
+    if (len < 10U || id[0] != 'g') {
+        return false;
+    }
+    for (i = 1U; i < 10U; i++) {
+        if (id[i] < '0' || id[i] > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Every field asserted here was read directly out of the real
  * config.bin with `xxd` and cross-checked against
  * docs/dandocs-magb.md's "Configuration Data" section before being
@@ -71,10 +87,11 @@ static void test_real_capture(void)
     check(magb_config_checksum_ok(config),
           "real capture: stored checksum matches the additive sum of bytes 0x00-0xBD");
 
-    /* Login ID: "g000000034", exactly the documented gXXXXXXXXX shape. */
+    /* Login ID: the documented gXXXXXXXXX shape ('g' plus nine digits).
+     * The capture's real ID is deliberately not committed. */
     login_len = MAGB_CONFIG_LOGIN_ID_LEN;
-    check(memcmp(&config[MAGB_CONFIG_OFF_LOGIN_ID], "g000000034", login_len) == 0,
-          "real capture: login ID == \"g000000034\"");
+    check(login_id_has_documented_shape(&config[MAGB_CONFIG_OFF_LOGIN_ID], login_len),
+          "real capture: login ID has the documented gXXXXXXXXX shape");
 
     /* DNS servers match Dan Docs' documented Mobile System GB defaults
      * exactly (210.196.3.183 / 210.141.112.163), independent confirmation
