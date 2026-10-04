@@ -61,8 +61,8 @@
  * empty, rather than guessing one.
  *
  * TEST_ISP_PASSWORD_MAX_LEN caps the ISP PASSWORD screen's editable
- * length at 8 characters (the project owner's own account password,
- * "[redacted]", is 7) -- well under the Mobile Adapter protocol's own
+ * length at 8 characters (enough for the real account passwords this
+ * suite has been run with) -- well under the Mobile Adapter protocol's own
  * 0x20-byte ISP Login password field limit; this is purely this
  * TestSuite's own UI constraint. */
 #define TEST_ISP_PASSWORD_MAX_LEN 8U
