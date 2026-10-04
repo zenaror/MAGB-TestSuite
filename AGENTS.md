@@ -38,7 +38,7 @@ Orientação curta para agentes de IA e pessoas que trabalham neste repositório
 7. Se as ferramentas da OMM não estiverem disponíveis, diga isso. Não afirme que consultou ou salvou algo sem confirmação.
 8. A pasta `memory/` e o `OMM.md` da raiz são legado de 2026-10-01: não grave em `memory/`. A memória canônica é a OMM central (veja `OMM.md`).
 
-O `CLAUDE.md` antigo, em inglês, foi substituído por este arquivo; comentários do código ainda citam seções dele. O texto completo continua em `git show 607ee05:CLAUDE.md` e na fonte OMM `sources/magb-testsuite/project-rules/AGENTS.md`.
+O `CLAUDE.md` antigo, em inglês, foi substituído por este arquivo; comentários do código ainda citam seções dele. O texto completo continua em `git show e83bd07:CLAUDE.md` e na fonte OMM `sources/magb-testsuite/project-rules/AGENTS.md`.
 
 ## Prioridades
 

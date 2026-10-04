@@ -132,7 +132,7 @@ its own tests, its own docs. [`AGENTS.md`](AGENTS.md) at the repo root
 covers both — working rules for contributors and AI agents (in
 Portuguese), and it states explicitly which parts are GBDK-specific.
 The original English project brief it replaced, `CLAUDE.md`, is kept in
-the git history (`git show 607ee05:CLAUDE.md`); code comments that cite
+the git history (`git show e83bd07:CLAUDE.md`); code comments that cite
 its sections refer to that text.
 
 ## Repository layout
