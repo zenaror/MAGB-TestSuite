@@ -635,7 +635,8 @@ below, found from a real BGB link-log capture.
 
 **Actual root cause, found 2026-08-27: `GB00_RESP_BUF_SIZE` was too
 small.** The project owner's own account credentials
-(`g000000034`/`[redacted]`, confirmed correct) were being sent correctly
+(login ID and password -- both confirmed correct, deliberately not
+recorded here) were being sent correctly
 in the ISP Login packet the whole time -- the log proved the ROM never
 even got as far as attempting the authenticated retry. A real 401
 response from the actual nginx-fronted server is:
