@@ -108,6 +108,11 @@ than duplicated per directory — see
 [`gbdk/docs/testing.md`](gbdk/docs/testing.md) for how each is used
 and provisioned. Neither is part of this repository.
 
+## AI assistance
+
+Parts of this project were developed with assistance from AI tools,
+including code generation.
+
 ## License
 
 See [`LICENSE`](LICENSE). This repository contains original homebrew

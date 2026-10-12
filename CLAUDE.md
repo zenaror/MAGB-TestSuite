@@ -1673,3 +1673,8 @@ Manual tests requested
 If compilation fails because GBDK is not installed, say so explicitly and include the exact failed discovery/build command.
 
 Do not report a successful build unless it actually completed successfully.
+
+## Commit attribution
+
+Do not automatically add Claude/Anthropic `Co-authored-by` trailers.
+Preserve human coauthors, legitimate credits, and existing licenses.
