@@ -24,3 +24,5 @@ config.bin
 # Local index of the old per-project OMM; it can be rebuilt. The
 # canonical memory is the central OMM, and memory/ is legacy (see OMM.md).
 .omm/
+# Local history-rewrite backups and isolated preparation repositories.
+/.history-preparation/

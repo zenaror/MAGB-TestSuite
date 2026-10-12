@@ -38,7 +38,7 @@ Orientação curta para agentes de IA e pessoas que trabalham neste repositório
 7. Se as ferramentas da OMM não estiverem disponíveis, diga isso. Não afirme que consultou ou salvou algo sem confirmação.
 8. A pasta `memory/` e o `OMM.md` da raiz são legado de 2026-10-01: não grave em `memory/`. A memória canônica é a OMM central (veja `OMM.md`).
 
-O `CLAUDE.md` antigo, em inglês, foi substituído por este arquivo; comentários do código ainda citam seções dele. O texto completo continua em `git show e83bd07:CLAUDE.md` e na fonte OMM `sources/magb-testsuite/project-rules/AGENTS.md`.
+O `CLAUDE.md` antigo, em inglês, foi substituído por este arquivo; comentários do código ainda citam seções dele. O texto completo continua em `git show dd8e8fd:CLAUDE.md` e na fonte OMM `sources/magb-testsuite/project-rules/AGENTS.md`.
 
 ## Prioridades
 
@@ -98,6 +98,7 @@ Os detalhes e os motivos estão em `gbdk/docs/protocol-notes.md`.
 - **Feedback de runtime é evidência.** Ache o estado ou pacote correspondente, compare com as referências, corrija a menor causa provável, compile e diga o que retestar.
 - **Documentação** do repositório é em inglês e serve a outros desenvolvedores. Atualize `README.md`, `gbdk/docs/` e `rgbds/docs/` quando o comportamento mudar. Não registre especulação como fato.
 - **Commit e push** só quando o Rafael pedir.
+- **Créditos de commits:** não acrescente automaticamente trailers `Co-authored-by` de Claude/Anthropic. Preserve coautores humanos, créditos legítimos e licenças existentes.
 
 ## Referências
 

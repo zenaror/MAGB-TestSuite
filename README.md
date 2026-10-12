@@ -132,7 +132,7 @@ its own tests, its own docs. [`AGENTS.md`](AGENTS.md) at the repo root
 covers both — working rules for contributors and AI agents (in
 Portuguese), and it states explicitly which parts are GBDK-specific.
 The original English project brief it replaced, `CLAUDE.md`, is kept in
-the git history (`git show e83bd07:CLAUDE.md`); code comments that cite
+the git history (`git show dd8e8fd:CLAUDE.md`); code comments that cite
 its sections refer to that text.
 
 ## Repository layout
@@ -158,6 +158,11 @@ BIG BUFFER tests talk to. They are not needed to build either ROM, only
 to pass those two tests, and they are checked in so the tests are
 reproducible on any REON host rather than on one particular person's —
 see [`server/README.md`](server/README.md).
+
+## AI assistance
+
+Parts of this project were developed with assistance from AI tools,
+including code generation.
 
 ## License
 
