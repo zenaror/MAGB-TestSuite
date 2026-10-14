@@ -127,8 +127,10 @@ diagnostic ROM? Each side has an integration guide —
 (start here even for assembly; the protocol reasoning lives there) and
 [`rgbds/docs/integration-guide.md`](rgbds/docs/integration-guide.md).
 
-Each implementation is independently self-contained: its own build,
-its own tests, its own docs. [`AGENTS.md`](AGENTS.md) at the repo root
+Each implementation keeps its own build and documentation. Host-side
+protocol tests live under `gbdk/tests/host/`; manual verification and
+implementation-specific limits are documented separately.
+[`AGENTS.md`](AGENTS.md) at the repo root
 covers both — working rules for contributors and AI agents (in
 Portuguese), and it states explicitly which parts are GBDK-specific.
 The original English project brief it replaced, `CLAUDE.md`, is kept in
@@ -158,6 +160,21 @@ BIG BUFFER tests talk to. They are not needed to build either ROM, only
 to pass those two tests, and they are checked in so the tests are
 reproducible on any REON host rather than on one particular person's —
 see [`server/README.md`](server/README.md).
+
+### Development map
+
+The maintained project is one repository containing both implementations.
+Their existing directories provide the shared responsibilities below;
+there is no separate root `src/`, `docs/` or `tools/` tree to duplicate.
+
+| Responsibility | Canonical location |
+| --- | --- |
+| Working rules and cleanup | [`AGENTS.md`](AGENTS.md); shared skills and rules remain in the central OMM described by [`OMM.md`](OMM.md). |
+| Source and interfaces | [`gbdk/src/`](gbdk/src/) and [`gbdk/include/`](gbdk/include/); [`rgbds/src/`](rgbds/src/) and [`rgbds/include/`](rgbds/include/). Each implementation's README describes its layers. |
+| Protocol and integration | [`gbdk/docs/protocol-notes.md`](gbdk/docs/protocol-notes.md), [`gbdk/docs/dandocs-magb.md`](gbdk/docs/dandocs-magb.md), and both [GBDK](gbdk/docs/integration-guide.md) and [RGBDS](rgbds/docs/integration-guide.md) integration guides. |
+| Build, validation and tools | Each implementation's [GBDK](gbdk/README.md) or [RGBDS](rgbds/README.md) README and Makefile. GBDK host tests use `make test`; `make check-banking` uses [`gbdk/tools/check_far_calls.py`](gbdk/tools/check_far_calls.py). Dependencies, captured-fixture limits and manual tests are in [`gbdk/docs/testing.md`](gbdk/docs/testing.md). Build/host checks are distinct from runtime or hardware evidence. |
+| History, remaining work and continuity | [GBDK journal](gbdk/docs/journal.md), [RGBDS journal](rgbds/docs/journal.md) and [`rgbds/docs/status.md`](rgbds/docs/status.md), retaining the dates and limits of their observations. Current coordination and handoff use the central OMM; [`memory/`](memory/) is legacy, as explained in [`OMM.md`](OMM.md). |
+| Server fixtures and local inputs | [`server/README.md`](server/README.md) documents the reproducible endpoints. `config.bin`, `emulador/` and read-only `references/` stay local and outside Git. Ignored files can still be unique evidence or private data; follow the cleanup policy before deleting them. |
 
 ## AI assistance
 

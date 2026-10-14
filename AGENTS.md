@@ -25,6 +25,7 @@ Orientação curta para agentes de IA e pessoas que trabalham neste repositório
 
 1. Consulte primeiro a memória interna do seu agente para este projeto.
 2. Depois consulte a OMM pelo MCP (a conexão que dá ao agente as ferramentas da OMM):
+   - `get_role(name="project-base")` uma vez na retomada; reutilize a base comum enquanto vigente;
    - `context` no escopo `magb-testsuite`, incluindo `global` para o conhecimento de domínio de REON, libmobile e Mobile Adapter GB (tags `domain:*`);
    - `search` e `get_memory` para achar e abrir anotações;
    - `search_sources` e `read_source` para conferir uma fonte.
@@ -102,6 +103,7 @@ Os detalhes e os motivos estão em `gbdk/docs/protocol-notes.md`.
 
 ## Referências
 
+- O mapa de código, documentação, validações, ferramentas e continuidade fica no `README.md` da raiz. As árvores `gbdk/` e `rgbds/` são equivalentes especializados da base comum; não reorganize seus arquivos só para padronizar nomes de pastas.
 - Neste repositório:
   - `gbdk/docs/dandocs-magb.md`: Dan Docs convertido; é a primeira consulta para fatos do protocolo;
   - `gbdk/docs/protocol-notes.md`, `gbdk/docs/testing.md` e `gbdk/docs/integration-guide.md`;
@@ -110,6 +112,24 @@ Os detalhes e os motivos estão em `gbdk/docs/protocol-notes.md`.
   - pokecrystal-mobile-eng, libma, libmobile (upstream e fork `zenaror`), libmobile-bgb, REON, reon-docs e pokestadiumgs;
   - gba-link-connection (LinkMobile), só como referência de arquitetura.
 - Não copie código sem conferir a licença, e nunca copie a camada GBA.
+
+## Cleanup e retenção
+
+Aplicar a regra global OMM `6b256ecb-03db-4417-be99-a6c5aa468f12` ao fechar tarefas, checkpoints e pausas. Arquivo ignorado ou não rastreado não é automaticamente descartável.
+
+| Categoria | Origem e reprodução | Retenção e alcance da limpeza |
+| --- | --- | --- |
+| `gbdk/build/`, incluindo testes host e `bankcheck/`; `rgbds/build/` | Gerados pelos comandos de build/teste da respectiva implementação; reprodução exige fonte/commit, toolchain, flags e fixtures correspondentes. | Limpar somente saídas da tarefa concluída, após preservar resultados aceitos, casos de falha, ROM/mapa/símbolos necessários e comandos/ambiente/hashes em armazenamento durável. Builds anteriores sem proveniência ou ainda usados em runtime ficam pendentes, sem exclusão automática. |
+| ROMs copiadas para `emulador/`, saves, configuração e logs/capturas | O build copia a ROM; o emulador/adaptador e o Operador produzem os demais arquivos. | Preservar saves, `config.bin`, capturas e evidências únicas de console/hardware. Uma ROM aceita ou usada num teste não é só um intermediário. Nunca limpar `emulador/` em bloco; não publicar credenciais ou conteúdo de saves/configuração. |
+| `server/`, fixtures, originais, `references/` e releases aceitas | Fontes e recursos de reprodução/validação; referências externas são somente leitura. | Não são alvos de cleanup automático. Preservar os originais e a versão que sustenta cada resultado. |
+| `.history-preparation/` | Preparação local de reescrita Git; bundles, mapas, patches, scripts, relatórios e checksums permitem recuperar/conferir o trabalho. | Conservar esse conjunto durável enquanto necessário à recuperação e migração dos clones, sem prazo automático. Clones de ensaio/verificação e extrações duplicadas podem ser removidos por nome explícito após conferir cobertura pelos bundles, ausência de alterações únicas e processos ativos; registrar refs, reprodução e remoções antes. Nunca publicar esses backups. |
+| Temporários de análise e índices locais | Produzidos pela tarefa ou por ferramenta identificada; índices reconstruíveis não substituem fontes. | Remover apenas caminhos conhecidos e controlados pela tarefa depois de preservar o mínimo suficiente à reprodução. Não usar `/tmp` como referência permanente, nem limpar índices de outra sessão. Origem incerta, falha não explicada ou decisão pendente implica retenção até esclarecer. |
+
+Antes de remover, conferir caminho real, links simbólicos, proprietário, conteúdo único e uso por processos/sessões. Não tocar processos ativos nem trabalho alheio. Não usar `git clean -xfd`, glob amplo, exclusão por idade ou limpeza retroativa em massa.
+
+Os `clean` existentes removem apenas o `build/` da implementação selecionada, com as variáveis padrão. Inspecionar primeiro com `make -n -C gbdk clean` ou `make -n -C rgbds clean`; executar o comando sem `-n` somente se todo o diretório tiver sido classificado como descartável, não for link e estiver livre de uso. Não sobrescrever `BUILD_DIR` para ampliar o alcance. Não rodar builds/testes novos apenas para aplicar cleanup.
+
+Registrar no handoff os caminhos removidos e preservados, condições de retenção e pendências; medir quantidade/tamanho quando barato. A limpeza não concede autorização adicional de commit, push, release ou sync global da OMM.
 
 ## Quando termina
 
