@@ -169,11 +169,11 @@ there is no separate root `src/`, `docs/` or `tools/` tree to duplicate.
 
 | Responsibility | Canonical location |
 | --- | --- |
-| Working rules and cleanup | [`AGENTS.md`](AGENTS.md); shared skills and rules remain in the central OMM described by [`OMM.md`](OMM.md). |
+| Working rules and cleanup | [`AGENTS.md`](AGENTS.md); project memory, shared rules and handoff remain exclusively in the central OMM. |
 | Source and interfaces | [`gbdk/src/`](gbdk/src/) and [`gbdk/include/`](gbdk/include/); [`rgbds/src/`](rgbds/src/) and [`rgbds/include/`](rgbds/include/). Each implementation's README describes its layers. |
 | Protocol and integration | [`gbdk/docs/protocol-notes.md`](gbdk/docs/protocol-notes.md), [`gbdk/docs/dandocs-magb.md`](gbdk/docs/dandocs-magb.md), and both [GBDK](gbdk/docs/integration-guide.md) and [RGBDS](rgbds/docs/integration-guide.md) integration guides. |
 | Build, validation and tools | Each implementation's [GBDK](gbdk/README.md) or [RGBDS](rgbds/README.md) README and Makefile. GBDK host tests use `make test`; `make check-banking` uses [`gbdk/tools/check_far_calls.py`](gbdk/tools/check_far_calls.py). Dependencies, captured-fixture limits and manual tests are in [`gbdk/docs/testing.md`](gbdk/docs/testing.md). Build/host checks are distinct from runtime or hardware evidence. |
-| History, remaining work and continuity | [GBDK journal](gbdk/docs/journal.md), [RGBDS journal](rgbds/docs/journal.md) and [`rgbds/docs/status.md`](rgbds/docs/status.md), retaining the dates and limits of their observations. Current coordination and handoff use the central OMM; [`memory/`](memory/) is legacy, as explained in [`OMM.md`](OMM.md). |
+| History, remaining work and continuity | [GBDK journal](gbdk/docs/journal.md), [RGBDS journal](rgbds/docs/journal.md) and [`rgbds/docs/status.md`](rgbds/docs/status.md), retaining the dates and limits of their observations. Current coordination and handoff use only the central OMM. |
 | Server fixtures and local inputs | [`server/README.md`](server/README.md) documents the reproducible endpoints. `config.bin`, `emulador/` and read-only `references/` stay local and outside Git. Ignored files can still be unique evidence or private data; follow the cleanup policy before deleting them. |
 
 ## AI assistance

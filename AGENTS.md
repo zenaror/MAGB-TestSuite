@@ -37,7 +37,7 @@ Orientação curta para agentes de IA e pessoas que trabalham neste repositório
    - mantenha a memória interna e a OMM em acordo. A interna pode ser mais curta, mas não pode ter conhecimento que falte na OMM.
 6. Nunca grave segredos nem dados pessoais: senhas, tokens, conteúdo de `config.bin` ou de `.sav`, `device_auth_key`, IDs de conta (gID) ou e-mails pessoais. Ao analisar, mostre só rótulos e contagens.
 7. Se as ferramentas da OMM não estiverem disponíveis, diga isso. Não afirme que consultou ou salvou algo sem confirmação.
-8. A pasta `memory/` e o `OMM.md` da raiz são legado de 2026-10-01: não grave em `memory/`. A memória canônica é a OMM central (veja `OMM.md`).
+8. A memória e a continuidade do projeto ficam exclusivamente na OMM central; não replique esse conteúdo no repositório.
 
 O `CLAUDE.md` antigo, em inglês, foi substituído por este arquivo; comentários do código ainda citam seções dele. O texto completo continua em `git show dd8e8fd:CLAUDE.md` e na fonte OMM `sources/magb-testsuite/project-rules/AGENTS.md`.
 
