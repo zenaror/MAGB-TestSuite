@@ -50,21 +50,37 @@ void test_adapter_session(magb_context_t *ctx, test_result_t *out);
 void test_isp_http(magb_context_t *ctx, test_result_t *out, const char *password,
                     const char *host, uint16_t port, const char *path);
 
-/** Like test_isp_http(), but performs REON's GB00 challenge/response
- * HTTP authentication first if the server answers with 401 and a
- * WWW-Authenticate: GB00 header (see docs/protocol-notes.md, "GB00
- * HTTP authentication"). The GB00 login is the same live-config login
- * ID test_isp_http() uses; `password` is the same account password. */
-void test_isp_http_gb00(magb_context_t *ctx, test_result_t *out, const char *password,
-                         const char *host, uint16_t port, const char *path);
 
-/** The "NEWS ARTICLE" test: like test_isp_http_gb00(), but performs
- * the real game's full two-request flow in one ISP session -- fetches
- * TEST_HTTP_NEWS_CONFIG_PATH (news size/SRAM-address/ranking-layout
- * metadata) first, then TEST_HTTP_NEWS_PATH (the actual news content),
- * each with its own GB00 challenge/response, sharing a single DNS
- * Query for TEST_HTTP_HOST. */
-void test_isp_news_article(magb_context_t *ctx, test_result_t *out, const char *password);
+/** The "SMALL BUFFER" test: the small half of the synthetic pair that
+ * replaced the Pokemon-data "NEWS ARTICLE" test. One GB00-authenticated
+ * download of TEST_SMALLBUFFER_SIZE bytes -- small enough to arrive in
+ * a single Transfer Data response, so it covers the no-streaming,
+ * no-chunking regime BIG BUFFER never touches -- followed by a POST of
+ * the same pattern back to the SAME URL, reusing the GET's
+ * Authorization with no second challenge.
+ *
+ * That reuse is the point: this path goes through REON's doAuth(2)
+ * ("utility" auth), whose 15-minute session cache exists precisely so
+ * the official client can POST after authenticating once. Nothing else
+ * in this TestSuite exercises it. See test_runner.c for the full
+ * comparison against BIG BUFFER's doAuth(1)/type-0 route. */
+void test_isp_small_buffer(magb_context_t *ctx, test_result_t *out, const char *password);
+
+/** The "BIG BUFFER" test: the large half of the pair, and the other
+ * half of REON's auth -- where SMALL BUFFER goes through doAuth(2)'s
+ * cached-Authorization route, this one takes doAuth(1) for the
+ * download and the three-request type-0 route for the upload (that
+ * handler exits after issuing a Gb-Auth-ID, so the second request's
+ * body is discarded by design). Downloads TEST_BIGBUFFER_SIZE bytes
+ * (TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH), verifying it via a running
+ * 16-bit additive checksum streamed against the response's
+ * `X-Test-Checksum` header (never buffering more than one Transfer
+ * Data chunk of the body at a time), then uploads the same
+ * deterministic pattern back (TEST_HTTP_BIGBUFFER_UPLOAD_PATH,
+ * generated on the fly rather than stored) and checks the server's
+ * own pass/fail response byte. Each leg gets its own GB00 challenge/
+ * response, one ISP session for both. */
+void test_isp_big_buffer(magb_context_t *ctx, test_result_t *out, const char *password);
 
 /** Test 2b: Begin Session, Read Configuration to find the adapter's
  * own configured login ID, dial string, email address and SMTP server,
@@ -76,7 +92,16 @@ void test_isp_email_send(magb_context_t *ctx, test_result_t *out, const char *pa
 
 /** Test 2c: like test_isp_email_send(), but against the configured
  * POP3 server: USER (the local part of the configured email address)
- * / PASS (`password`) / STAT, reporting the mailbox message count. */
+ * / PASS (`password`) / STAT, reporting the mailbox message count,
+ * then TOP n 0 over the listing to find this TestSuite's own messages
+ * and DELE them.
+ *
+ * It deletes ONLY messages whose subject starts with kTestEmailSubject
+ * -- deliberately unlike the real Mobile Trainer, which RETRs what it
+ * downloads and deletes all of it. This runs against a real mailbox;
+ * a test that removed everything it found would delete real mail.
+ * DELE only marks: the QUIT is what commits, so a failure partway
+ * through leaves the mailbox untouched. */
 void test_isp_email_recv(magb_context_t *ctx, test_result_t *out, const char *password);
 
 /** Test 2d ("RAW TCP"): Begin Session, Read Config (login/dial string
@@ -104,6 +129,51 @@ void test_p2p_caller(magb_context_t *ctx, test_result_t *out, const char *number
 /** Test 3 (Listener role): Begin Session, Wait For Call, exchange the
  * MATS test frames (responder side), Hang Up, End Session. */
 void test_p2p_listener(magb_context_t *ctx, test_result_t *out);
+
+
+/* ---- Server conformance -----------------------------------------------
+ *
+ * Deliberately a separate section, reached from its own main-menu entry
+ * rather than from the ISP/HTTP submenu. Everything above tests the
+ * ADAPTER: it passes when the Mobile Adapter, libmobile and the link
+ * behave. What follows tests the SERVER, and can fail while every
+ * adapter test passes. Mixing the two would make a red result
+ * ambiguous about which side is broken, which is the one thing this
+ * ROM exists to avoid.
+ *
+ * (One test today. When a second arrives, this becomes a submenu the
+ * way ISP/HTTP is; a submenu of one would be ceremony.)
+ */
+
+/** Sends an Authorization whose first GB00_AUTH_PREFIX_LEN characters
+ * are correct and whose remaining characters are not, and requires the
+ * server to REJECT it.
+ *
+ * Those first 44 characters are an echo of the challenge the server
+ * itself just published in its 401. Anyone who can read that 401 can
+ * reproduce them without knowing any credential, so a server that
+ * validates only the prefix authenticates nobody. REON did exactly
+ * that in its utility-auth cache -- found from this ROM's side, by
+ * accident, when a buffer overflow truncated a real Authorization and
+ * the server accepted it anyway (docs/protocol-notes.md).
+ *
+ * PASS means 401 carrying `Gb-Status: 201` -- the server's verdict on
+ * the credential. The three outcomes are deliberately distinguished,
+ * because they are three different facts:
+ *
+ *   200                     the bypass is open: this server lacks the
+ *                           fix, and its auth can be replayed by
+ *                           anyone who can read a challenge.
+ *   401 + Gb-Status: 201    PASS. Full validation ran and rejected it.
+ *   401, no Gb-Status       inconclusive, not a pass -- the challenge
+ *                           expired, so nothing judged the credential.
+ *
+ * Needs the same ISP password as the other authenticating tests: the
+ * VALID Authorization has to be built first, and then damaged, or the
+ * request would be rejected for a reason that has nothing to do with
+ * the prefix. */
+void test_srv_auth_prefix(magb_context_t *ctx, test_result_t *out, const char *password);
+
 
 /** Read Configuration Data (0x19), both halves, into `config_out`. */
 void test_read_config(magb_context_t *ctx, uint8_t config_out[MAGB_CONFIG_SIZE], test_result_t *out);

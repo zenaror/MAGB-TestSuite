@@ -13,9 +13,9 @@
 #define TEST_CONFIG_H
 
 /* ISP dial string and login ID -- FALLBACK DEFAULTS ONLY. Every
- * ISP-touching test (test_isp_http(), test_isp_http_gb00(),
- * test_isp_email_send/recv() in test_runner.c, via the shared
- * read_isp_identity() helper) reads the real dial string
+ * ISP-touching test (test_isp_http(), test_isp_small_buffer(),
+ * test_isp_big_buffer(), test_isp_email_send/recv() in test_runner.c,
+ * via the shared read_isp_identity() helper) reads the real dial string
  * (Configuration Slot 1, BCD-decoded) and login ID
  * (MAGB_CONFIG_OFF_LOGIN_ID) live from the adapter's own Read
  * Configuration Data (0x19) response, exactly like the email tests
@@ -49,8 +49,9 @@
  * configuration layout (it is only ever kept in a game's own save
  * data), so it can never be read from Read Config either -- it has to
  * come from the user, via the "ISP PASSWORD" menu entry
- * (ui_edit_text() in main.c, kept only in RAM; this ROM has no
- * mapper/save). An earlier version of this file *did* define
+ * (ui_edit_text() in main.c). It is persisted to battery-backed cart
+ * SRAM and restored at boot (see save.h) -- persisted, but still never
+ * defaulted. An earlier version of this file *did* define
  * TEST_ISP_PASSWORD "test" as a default, which silently masked a real
  * server-side 401/-ERR behind a misleading symptom for a full day of
  * debugging (see docs/protocol-notes.md's GB00 section) -- removed for
@@ -102,26 +103,113 @@
 #define TEST_HTTP_PORT        80
 #define TEST_HTTP_PATH        "/cgb/download?name=/01/CGB-BXTJ/tamago/index.txt"
 
-/* Two more real, no-invented-URL targets on the same host, from the
- * same REON test dataset, covering Pokémon Crystal's other real
- * Mobile Adapter datacenter feature: the Goldenrod Communication
- * Center "News" service (`web/cgb/download/01/CGB-BXTJ/news/`).
+/* REON's synthetic MAGBTEST fixtures. Neither is a real licensed
+ * title's endpoint -- deliberately not a "CGB-XXXX-NN"-shaped folder,
+ * since that format belongs to real cartridges (see repo-root
+ * CLAUDE.md: "This is NOT a Pokemon Crystal clone and must not contain
+ * Pokemon-specific game code").
  *
- * Both of these require REON's GB00 challenge/response HTTP auth --
- * confirmed by reading web/cgb/pokemon/news.php, not assumed: unlike
- * the tamago index.txt above, BOTH get_news_parameters_bin()
- * (config.php) and get_news_file() (100.news.php) unconditionally
- * call doAuth(2) ("Pokémon news + ranking endpoints require auth even
- * if free"). The numeric-cost-prefix exemption that lets tamago's
- * index.txt through only skips the *front controller's* cost check --
- * it does not stop the PHP script itself from demanding auth once
- * executed. This TestSuite implements that handshake (see
- * `include/gb00_auth.h`, `test_isp_http_gb00()` in test_runner.c, and
- * docs/protocol-notes.md's "GB00 HTTP authentication") using the
- * adapter's own live-config login ID (falling back to TEST_ISP_LOGIN)
- * and the ISP PASSWORD menu's password as the account credentials. */
-#define TEST_HTTP_NEWS_CONFIG_PATH "/cgb/download?name=/01/CGB-BXTJ/news/config.php"
-#define TEST_HTTP_NEWS_PATH        "/cgb/download?name=/01/CGB-BXTJ/news/100.news.php"
+ * These replaced a "NEWS ARTICLE" test that fetched Pokemon Crystal's
+ * own news endpoints (/01/CGB-BXTJ/news/config.php and 100.news.php).
+ * It worked, but it validated the GB00 handshake against real game
+ * data; the project owner asked for synthetic data instead, which is
+ * what these are.
+ *
+ * The two differ only in size, and that difference is the point:
+ *
+ *   BIG   (TEST_BIGBUFFER_SIZE) is far larger than one Transfer Data
+ *         (0x15) response and than any buffer this ROM could hold, so
+ *         it exercises the streaming path -- a running 16-bit additive
+ *         checksum computed chunk by chunk, never buffered in full --
+ *         plus a full upload round trip.
+ *   SMALL (TEST_SMALLBUFFER_SIZE) fits in a SINGLE Transfer Data
+ *         response, so it exercises the opposite regime: no streaming,
+ *         no chunking, header and body arriving together.
+ *
+ * They also reach different halves of REON's auth. download.php calls
+ * doAuth(1) and upload.php calls doAuth() (type 0), which is what BIG
+ * uses. doAuth(2) -- "utility" auth -- is reached only by a script that
+ * authenticates itself, the way news.php does, with download.php's
+ * $skipCostAuth letting it through. SMALL mirrors that mechanism, so
+ * removing the news test does not take doAuth(2) coverage with it.
+ * See docs/protocol-notes.md, "GB00: download and upload do NOT
+ * authenticate the same way". */
+
+/* REON's dedicated "BIG BUFFER" stress-test fixture -- unlike every
+ * other path above, this is NOT a real licensed title's endpoint
+ * (deliberately not a "CGB-XXXX-NN"-shaped folder, since that format
+ * is reserved for real cartridges; see repo-root CLAUDE.md's "This is
+ * NOT a Pokémon Crystal clone and must not contain Pokémon-specific
+ * game code"). Added specifically to exercise a body (TEST_BIGBUFFER_
+ * SIZE bytes) far larger than any single Transfer Data (0x15)
+ * response and than any buffer this ROM could hold at once (8 KiB is
+ * the Game Boy's entire work RAM) -- see
+ * gb00_stream_request()/test_isp_big_buffer() in
+ * test_runner.c for how that's verified (a running 16-bit additive
+ * checksum computed while streaming, never buffered in full). Same
+ * host as Tamago above; the paths were relayed cross-session while
+ * implementing this test rather than read out of REON's PHP source the
+ * way the paths above were -- but both legs have since been confirmed
+ * end to end against the real server, with the fixtures checked in
+ * under the repo's server/ directory. */
+#define TEST_HTTP_BIGBUFFER_DOWNLOAD_PATH "/cgb/download?name=/01/MAGBTEST/0.bigbuffer.cgb"
+#define TEST_HTTP_BIGBUFFER_UPLOAD_PATH   "/cgb/upload?name=/01/MAGBTEST/0.bigbuffer.cgb"
+#define TEST_BIGBUFFER_SIZE 8192U
+
+/* The small half of the pair. 128 bytes fits inside one Transfer Data
+ * payload, so the whole response lands in a single read -- the regime
+ * BIG BUFFER never touches. Same body contract as BIG (body[i] ==
+ * i & 0xFF) and the same X-Test-Checksum header, so there is only one
+ * format to reason about; the expected checksum is 127*128/2 = 8128
+ * (0x1FC0). Reached through REON's doAuth(2) rather than doAuth(1),
+ * which requires a self-authenticating script server-side plus a
+ * download.php $skipCostAuth entry -- see this file's block comment
+ * above and the note in docs/protocol-notes.md. */
+#define TEST_HTTP_SMALLBUFFER_PATH "/cgb/download?name=/01/MAGBTEST/0.smallbuffer.cgb"
+#define TEST_SMALLBUFFER_SIZE 128U
+
+/* ---- Pacing -----------------------------------------------------------
+ *
+ * How long to wait between successive receive polls on one connection,
+ * in VBlanks (~59.7 Hz, so ~17 ms each).
+ *
+ * These are not invented. They come from a millisecond-timestamped BGB
+ * capture of the REAL Mobile Trainer, relayed by the person running the
+ * REON server, and the numbers were consistent across the whole
+ * transfer:
+ *
+ *   between data blocks in one HTTP transfer: 389, 389, 391, 405, 418,
+ *     336 ms -- call it ~400 ms. Mobile Trainer does NOT pull as fast
+ *     as the link allows; it takes a block, processes it, and only then
+ *     asks for the next.
+ *   idle after a transfer finished: 929..1067 ms, ~1 s, for 11 s before
+ *     it disconnected.
+ *
+ * Why a TestSuite should care, beyond faithfulness: running flat out
+ * exercises timing paths no real client ever takes, and stops
+ * exercising the ones it does. That is not hypothetical here -- REON's
+ * own POP3 path has a race (its `+OK` for PASS is emitted outside the
+ * callback that populates the maildrop) that the real Mobile Trainer
+ * never hits and a fast test client hits immediately. Both regimes are
+ * worth being able to run, which is why these are constants rather than
+ * hardcoded delays:
+ *
+ *   make CFLAGS_EXTRA='-DTEST_PACING_RECV_FRAMES=0 -DTEST_PACING_IDLE_FRAMES=0'
+ *
+ * gives back the old flat-out behaviour for stress runs. Zero is
+ * handled explicitly (no wait at all), not as a one-frame wait.
+ *
+ * Pacing is ALL that was taken from that capture. It also shows Mobile
+ * Trainer opening several short sessions before it dials, with varying
+ * EEPROM read lengths and multi-second gaps -- that is recorded in
+ * docs/protocol-notes.md as an observation and deliberately not
+ * implemented. It was, briefly, and it was a mistake: it changed what
+ * the tests *are* rather than how fast they run, and a handshake test
+ * that performs four prior handshakes is no longer a handshake test.
+ * The capture was reference material for rhythm, not a feature. */
+#define TEST_PACING_RECV_FRAMES 24U /* ~400 ms between blocks of one transfer */
+#define TEST_PACING_IDLE_FRAMES 60U /* ~1 s between idle polls */
+
 
 /* Mobile Trainer's real home page -- Dan Docs' "Mobile Trainer"
  * section documents this exact observed URL

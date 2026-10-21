@@ -82,7 +82,7 @@ not implemented.
     / "NINTENDO ECHO OK" on success.
   - **ISP/HTTP** (`RunIspHttpMenu`/`ShowIspSubMenu`, Test 2): opens the
     same 7-item submenu gbdk's `ui_select_submenu()`/`kIspLabels[]` does
-    (same wording/order: Tamago Egg, News Config, News Article, Trainer
+    (same wording/order: Tamago Egg, Small Buffer, Big Buffer, Trainer
     Home, Email Send, Email Recv, Raw TCP(NC)) -- title row 0, items
     starting row 2, "A:RUN B:BACK" footer, selection resets to item 0
     every time it's entered (unlike the main menu's persisted
@@ -342,8 +342,8 @@ Test 2, ported from `gbdk/src/app/test_runner.c`'s `test_isp_http()`:
 
 A from-scratch SM83 port of gbdk's `gb00_auth.c` (MD5 + base64 + REON's
 GB00 challenge/response bit-scramble) -- the crypto/encoding engine
-News Config/Article need, and now do use (see "GB00 HTTP fetch engine
-and News Config/Article" below). Not re-derived independently -- ported
+News Article needs, and now does use (see "GB00 HTTP fetch engine
+and News Article" below). Not re-derived independently -- ported
 directly from gbdk's already-round-trip-tested-against-REON's-real-PHP
 implementation, so this only needed to be a *faithful transcription*,
 verified against known-good outputs rather than against a live server:
@@ -394,7 +394,7 @@ previously-visible free space. This matters a lot for what's next:
 News/Email/Raw TCP would likely not have fit in the ~5.9 KiB that was
 left in `ROM0` alone.
 
-### GB00 HTTP fetch engine and News Config/Article (`src/app/gb00_auth.asm`, `src/main.asm`)
+### GB00 HTTP fetch engine and News Article (`src/app/gb00_auth.asm`, `src/main.asm`)
 
 `Gb00FetchOne::` (gb00_auth.asm) wraps one GB00-authenticated HTTP GET,
 mirroring gbdk's `gb00_http_get()`/`gb00_status_code()`/
@@ -407,10 +407,12 @@ Authorization-header prefix + that value + a shared suffix. Every
 request text this engine sends is a compile-time ROM blob or
 prefix+value+suffix copied byte-by-byte into WRAM -- no `sprintf`, no
 packed structs, matching this project's serialization convention.
-`GB00_RESP_BUF_SIZE` is 300, the same number gbdk's own hard-won 401
-capture forced it to (a real nginx 401 challenge response measured 227
-bytes; 200 silently truncated the `WWW-Authenticate` line and broke
-every News test before ever attempting the authenticated retry).
+`GB00_RESP_BUF_SIZE` is 360, matching gbdk's own hard-won number (a
+real nginx 401 challenge response measured 227 bytes; 200 silently
+truncated the `WWW-Authenticate` line and broke every News test before
+ever attempting the authenticated retry; gbdk later bumped 200 -> 300
+-> 360 for a real, larger News Article binary body, and this port had
+drifted a revision behind before being brought back in sync).
 
 Verified via PyBoy (fresh instances per case -- see "Hard-won bugs"
 below for why): `Gb00StatusCode` and `Gb00FindChallenge` against a
@@ -426,22 +428,25 @@ hardware-confirmed elsewhere, plus the two now-verified parsers), and
 only a real adapter can meaningfully exercise the actual 401-then-retry
 round trip.
 
-`RunNewsConfigTest`/`RunNewsArticleTest` (main.asm) wire this into the
-ISP/HTTP submenu's NEWS CONFIG/NEWS ARTICLE entries: both refuse to run
-at all with an empty ISP PASSWORD (matches gbdk's `require_password()`
--- GB00 auth validates this against a real account, unlike Dial/ISP
-Login), then Begin Session -> Read Identity -> Dial -> ISP Login -> one
-shared DNS Query (`gameboy.datacenter.ne.jp`, same host Tamago Egg/
-Trainer Home use) -> News Config does one `Gb00FetchOne`
-(`/cgb/download?name=/01/CGB-BXTJ/news/config.php`); News Article does
-that same fetch *and* the article fetch
-(`/cgb/download?name=/01/CGB-BXTJ/news/100.news.php`) in the same ISP
-session, neither relying on REON's optional session-auth cache (each
-gets its own real challenge/response) -- matching gbdk's
-`test_isp_http_gb00()`/`test_isp_news_article()` exactly. PyBoy
-confirms both reach `Begin Session -> WAKE -> TIMEOUT -> FAIL` cleanly
-with no adapter attached (the same baseline every other ISP/HTTP test
-shows), and that the empty-password guard fires correctly before ever
+`RunNewsArticleTest` (main.asm) wires this into the ISP/HTTP submenu's
+NEWS ARTICLE entry: refuses to run at all with an empty ISP PASSWORD
+(matches gbdk's `require_password()` -- GB00 auth validates this
+against a real account, unlike Dial/ISP Login), then Begin Session ->
+Read Identity -> Dial -> ISP Login -> one DNS Query
+(`gameboy.datacenter.ne.jp`, same host Tamago Egg/Trainer Home use) ->
+one `Gb00FetchOne` for the news config
+(`/cgb/download?name=/01/CGB-BXTJ/news/config.php`) *and* one for the
+article (`/cgb/download?name=/01/CGB-BXTJ/news/100.news.php`) in the
+same ISP session, neither relying on REON's optional session-auth
+cache (each gets its own real challenge/response) -- matching gbdk's
+`test_isp_news_article()` exactly. (A standalone `RunNewsConfigTest`
+used to exist for just the config fetch in isolation -- matching
+gbdk's now-removed `test_isp_http_gb00()`/"NEWS CONFIG" -- removed as
+redundant once this test already exercises that same fetch on its way
+to the article.) PyBoy confirms it reaches `Begin Session -> WAKE ->
+TIMEOUT -> FAIL` cleanly with no adapter attached (the same baseline
+every other ISP/HTTP test shows), and that the empty-password guard
+fires correctly before ever
 attempting a session.
 
 ### Email Send / Email Recv (`src/app/net_extra.asm`, `src/main.asm`)
@@ -593,20 +598,23 @@ ended exactly where expected.
 
 ### ISP/HTTP submenu (`src/main.asm`)
 
-`RunIspHttpMenu`/`ShowIspSubMenu` -- the 7-item submenu gbdk's
+`RunIspHttpMenu`/`ShowIspSubMenu` -- the 6-item submenu gbdk's
 `ui_select_submenu()`/`kIspLabels[]` opens (same wording/order: TAMAGO
-EGG, NEWS CONFIG, NEWS ARTICLE, TRAINER HOME, EMAIL SEND, EMAIL RECV,
+EGG, NEWS ARTICLE, TRAINER HOME, EMAIL SEND, EMAIL RECV,
 RAW TCP(NC)) -- now exists and is what the main menu's "ISP/HTTP" item
 opens, replacing the earlier milestone's "runs Tamago Egg directly"
 behavior. Title row 0, items starting row 2, `"A:RUN B:BACK"` footer,
 selection resets to item 0 every entry (a plain WRAM byte, not
 persisted like the main menu's), B returns to the main menu. All 7
-entries are now backed by a real implementation (Tamago Egg, Trainer
-Home, News Config, News Article, Email Send, Email Recv, Raw TCP) --
-none of this submenu's entries show "NOT IMPLEMENTED" anymore. Verified
-via PyBoy: all 7 labels render correctly, up/down/A/B navigation works,
-B returns to the main menu, and each entry reaches its own real test
-flow.
+entries are backed by a real implementation (Tamago Egg, Small Buffer,
+Big Buffer, Trainer Home, Email Send, Email Recv, Raw TCP) -- nothing
+in this ROM shows "NOT IMPLEMENTED" any more; that screen and its
+string are gone. (Two entries that used to be here are not: News Config,
+removed as redundant with News Article, and News Article itself,
+replaced by Small Buffer so no test depends on Pokemon Crystal's live
+data.) Verified via PyBoy at the time it was a 6-entry menu: labels
+render correctly, up/down/A/B navigation works, B returns to the main
+menu, and each entry reaches its own real test flow.
 
 ### UI feedback: sound and a build indicator
 
@@ -1288,8 +1296,8 @@ cannot provide for itself (per `CLAUDE.md`'s Responsibility Boundary).
 All three of the repo-root `CLAUDE.md`'s named tests (Adapter/Session,
 ISP/HTTP, P2P Caller/Listener) exist as real, working implementations,
 and -- new since the previous milestone -- so does every one of the
-ISP/HTTP submenu's 7 targets (Tamago Egg, Trainer Home, News Config,
-News Article, Email Send, Email Recv, Raw TCP), plus Read Configuration
+ISP/HTTP submenu's 6 targets (Tamago Egg, Trainer Home, News Article,
+Email Send, Email Recv, Raw TCP), plus Read Configuration
 Data, a protocol trace viewer, the ISP PASSWORD editor, live ISP
 identity reading, and a verified MD5/base64/GB00 authentication +
 GB00 HTTP fetch engine + line-based SMTP/POP3 engine. Test 2's Tamago
@@ -1297,21 +1305,16 @@ Egg target has a full, real, libmobile-bgb-confirmed PASS; every other
 ISP/HTTP submenu target is new since that PASS and has only been
 verified as far as PyBoy (no real adapter) allows -- see "Manual
 verification status" for exactly what still needs a real
-PicoAdapterGB/BGB+libmobile-bgb run. **Test 3 (P2P) is the one piece of
-this ROM's own named scope that has not been confirmed to PASS at
-all** -- not because anything is missing on this side, but because it
-needs two real linked instances (two Game Boys + two Mobile Adapters,
-or two BGB+libmobile-bgb sessions) to actually prove out, which no
-single manual test session can provide alone. Reasonable next steps,
-roughly in order of value: (1) get a real two-instance P2P Caller/
-Listener PASS -- the one remaining unconfirmed piece of this ROM's core
-scope; (2) work through "Manual verification status"'s backlog of new
-ISP/HTTP submenu targets against a real adapter, one at a time,
-starting with whichever the project owner can test soonest; (3)
-best-effort cleanup on a mid-sequence ISP/HTTP failure, for full parity
-with gbdk's `isp_http_cleanup()`; (4) Write Configuration (`0x1A`); (5)
-showing the exact received HTTP/email byte counts on screen (would need
-a 16-bit-safe `BuildDecimal`, purely cosmetic).
+PicoAdapterGB/BGB+libmobile-bgb run. Test 3 (P2P) was written here as
+"the one piece of this ROM's named scope not confirmed to PASS" for a
+long while, because it needs two real linked instances at once. That
+was stale: the project owner had run it, both roles, and reported it
+only on 2026-09-08 -- see "Manual verification status". Reasonable next
+steps, roughly in order of value: (1) best-effort cleanup on a
+mid-sequence ISP/HTTP failure, for full parity with gbdk's
+`isp_http_cleanup()`; (2) Write Configuration (`0x1A`); (3) showing the
+exact received HTTP/email byte counts on screen (would need a
+16-bit-safe `BuildDecimal`, purely cosmetic).
 
 ## Manual verification status
 
@@ -1343,12 +1346,16 @@ project owner's step):
   server doesn't validate header shape, only the `DATA`/`.`
   terminator sequence, unchanged here), but not yet re-confirmed
   end-to-end through this ROM specifically.
-- **P2P Caller/Listener** is the one piece of this ROM's own named
-  scope (repo-root `CLAUDE.md`) not yet run against a real adapter --
-  needs two real linked instances (two Game Boys + two Mobile Adapters,
-  or two BGB+libmobile-bgb sessions) -- see "Suggested next milestone";
-  the two-simultaneous-setups requirement is why this is still open,
-  not anything known to be wrong on this side.
+- **P2P Caller/Listener: confirmed PASS by the project owner, both
+  roles with `DATA OK`, in a real two-instance run.** Reported on
+  2026-09-08 but run "a long time" before that, ahead of the September
+  device-auth work -- the exact date was not recorded. Not re-run since,
+  and nothing that changed in between touches its path: P2P uses
+  neither GB00 nor the mail authorization gate, and the protocol-layer
+  code it exercises (`MagbDial`/`MagbWaitForCall`/`MagbTransferData`
+  with `MAGB_P2P_CONNECTION_ID`) has not been modified. This entry stood
+  as "not yet run" for weeks after the run had happened; the lesson is
+  on the reporting side, not the code.
 - **Font rendering issue reported during Raw TCP (2026-08-30): some
   letters (e.g. "O") didn't show up.** Root-caused from the report
   alone (specific enough -- Raw TCP only, intermittent characters, not
@@ -1377,3 +1384,292 @@ project owner's step):
   could. A link-level trace from the adapter side for that exchange
   remains the most useful thing to pair it with, the same way earlier
   GBDK bugs got root-caused (see `gbdk/docs/journal.md`).
+
+## BIG BUFFER (`src/app/big_buffer.asm`)
+
+Port of gbdk's `test_isp_big_buffer()` and the `gb00_stream_*()` engine
+under it. The point of the test is a body an order of magnitude larger
+than anything this ROM can hold: 8192 bytes against a
+`GB00_RESP_BUF_SIZE` of 360.
+
+Download leg (**two** requests): GET the MAGBTEST fixture, take REON's
+401, answer it with the usual GB00 challenge/response, and stream the
+body through a running 16-bit additive checksum — the same algorithm the
+Mobile Adapter's own packet checksum uses — comparing the total against
+the response's `X-Test-Checksum` header.
+
+Upload leg (**three** requests — `upload.php` authenticates differently
+from `download.php`; see "GB00: download and upload do NOT authenticate
+the same way" in `gbdk/docs/protocol-notes.md`): probe with
+`Content-Length: 0` for a challenge; answer it, still with no body, to
+collect the `Gb-Auth-ID` the server issues; then POST the deterministic
+pattern (`body[i] == i & $FF`, regenerated one chunk at a time, never
+stored) carrying that id, the real `Content-Length`, and the download's
+verified checksum echoed back in `X-Test-Checksum`. The server's verdict
+arrives as the first body byte (`$01` = accepted).
+
+Notes worth keeping:
+
+- **Byte-identical requests to gbdk's.** Neither GET carries
+  `Connection: close`, because gbdk's GB00 path doesn't send it (HTTP/1.0
+  closes by default). The older News Config/Article blobs in `main.asm`
+  *do* send it and so diverge from gbdk — pre-existing, deliberately left
+  alone rather than changed as a drive-by edit. Verified by extracting
+  the request bytes from both built ROMs and comparing.
+- **The upload's authenticated POST header is 261 bytes**, over the
+  253-byte Transfer Data ceiling, so `BbSendAll` splits it. gbdk hit this
+  as a real bug first: passing 261 to a `uint8_t` length sent the literal
+  `"POST "` and nothing else, then waited for a reply to a request the
+  server never saw.
+- **Buffers live in WRAM bank 1** (`WRAMX`, `$D000`), not WRAM0 — WRAM0
+  was down to ~123 free bytes. Nothing else in this ROM touches WRAMX or
+  writes `rSVBK`, and both `SVBK=0` and `SVBK=1` select bank 1 on CGB, so
+  the region is mapped from power-on with no setup. A second WRAMX user
+  would have to revisit that.
+- **`wGb00RespLen` has to be published before calling into
+  `gb00_auth.asm`.** `Gb00StatusCode` and `Gb00FindChallenge` both read
+  it, but this engine tracks `wBbHeadLen` instead (the body deliberately
+  never lands in `wGb00RespBuf`). `BbStreamContinue` copies it across
+  once, before either helper runs.
+- **`include/gb00.inc`** now holds the shared `GB00_*` sizes. `EXPORT DEF`
+  makes a constant resolvable by the *linker*, but rgbasm assembles each
+  file independently, so a constant used in an `ASSERT` or a `ds` size
+  has to be visible at assembly time — which `big_buffer.asm`'s
+  request-buffer assertions need.
+
+Cost: ~2.5 KiB in `ROMX` bank 1 (10096 still free), ~305 bytes in `ROM0`
+(3051 free), 614 bytes of WRAM bank 1.
+
+**Verified against the real server on 2026-09-08**: `DL 8192 B OK` /
+`UPLOAD OK`, checksum `F000` agreeing in both directions.
+
+## SMALL BUFFER, and the removal of NEWS ARTICLE
+
+NEWS ARTICLE is gone. It fetched Pokémon Crystal's real news endpoints
+(`/01/CGB-BXTJ/news/config.php` and `100.news.php`) to prove the GB00
+handshake; the project owner asked for synthetic data instead. SMALL
+BUFFER replaces it, and is deliberately more than a rename.
+
+The pair now covers opposite ends of two axes at once:
+
+| | SMALL | BIG |
+|---|---|---|
+| size | 128 B, one Transfer Data response | 8192 B, streamed in ~33 |
+| regime | no streaming, no chunking | running checksum, chunked upload |
+| download auth | `doAuth(2)` (utility) | `doAuth(1)` |
+| upload | POST to the **same URL**, reusing the GET's `Authorization` | POST to `/cgb/upload`, `doAuth()` type 0 |
+| session token | none | `Gb-Auth-ID`, in a third request |
+
+The Authorization reuse is why SMALL exists rather than being BIG with a
+smaller constant. `auth.php` caches `utility_authed_user_id` for 15
+minutes precisely so the official client can POST after authenticating
+once (`news.php`: *"Ranking queries are POSTed without replaying a GB00
+auth challenge"*). That cache is the only server-side state on the path,
+and it would have gone uncovered when NEWS ARTICLE left.
+
+Notes:
+
+- **The server side had to be built for this.** `doAuth(2)` is not
+  something a client can select: `download.php`/`ranking.php` call
+  `doAuth(1)`, `upload.php` calls type 0, and type 2 is reached only by
+  `utility.php` or by a script that authenticates itself the way
+  `news.php` does, with `download.php`'s `$skipCostAuth` letting it
+  through. The REON maintainer added a self-authenticating fixture plus
+  a `$skipCostAuth` entry anchored to the exact path.
+- **`X-Test-User` is checked.** The fixture reports the user its utility
+  auth resolved. A correct body with user `0` fails as
+  `NOT AUTHENTICATED` — otherwise an endpoint that stopped enforcing
+  auth would still pass, which is the one thing this test must not do.
+- **A 401 on the POST has its own message**, `AUTH REUSE REJECTED`,
+  distinct from a checksum disagreement: it means the window did not
+  hold, which is a different fault entirely.
+- **Body size is verified exactly**, not just the checksum. A short read
+  that happened to sum correctly would otherwise pass silently.
+- Removing NEWS ARTICLE also made `Gb00FetchOne`/`Gb00HttpGetOnce` dead
+  (nothing else used them); both are gone, along with their scratch.
+  `Gb00StatusCode`, `Gb00FindChallenge` and `Gb00BuildAuthorization`
+  stay — the streaming engine uses them.
+
+Net effect on space, after adding a test: ROM0 3981 free (was 3039),
+ROMX 9101 free (was 9730 before SMALL BUFFER, 6288 used at its peak),
+WRAM0 390 free (was 123).
+
+**Verified against the real server on 2026-09-08**, after two bugs that
+took a BGB serial capture to find — an `Authorization` buffer overflow
+and a response arriving bundled with the send that completed the
+request. Both are written up in `gbdk/docs/protocol-notes.md`.
+
+## Cartridge save (MBC5 + RAM + BATTERY)
+
+This ROM was mapperless (cart type `$00`) for its whole life; it is now
+`$1B` with one 8 KiB RAM bank. The mapper is here **for the battery,
+not for space** — the build still fits in 32 KiB with ~3.9 KiB of ROM0
+to spare. What it buys is that the ISP password survives a power cycle
+instead of having to be retyped every boot.
+
+`src/app/save.asm` is a port of gbdk's `src/app/save.c`, byte-identical
+on-cart format, so the rules only have to be right once:
+
+```
+0   'M'      2  layout version     4..  password bytes
+1   'A'      3  length (0..8)      4+n  additive checksum of 0..4+n-1
+```
+
+Boot reads it into `wIspPassword` before the menu appears; the editor
+writes it back, but only when the user confirms with A (`EditText` now
+returns 1/0 for confirm/cancel, matching gbdk's `ui_edit_text()`
+returning `bool`, so cancelling leaves the stored value alone).
+
+What did **not** change is the refusal to guess. There is still no
+compiled-in default. A record that fails its magic, version or checksum
+check loads as empty and the authenticating tests still refuse to run,
+because uninitialized cart RAM is arbitrary bytes and "looks like a
+password" is not good enough — silently loading garbage would recreate
+the failure that made a guessed default worth deleting in the first
+place. The length is validated against both the format's cap and the
+caller's buffer before it is used to index anything; it comes out of
+battery-backed RAM, which is as untrusted as any other external input.
+
+**The `.sav` holds a real credential in plain text.** There is nothing
+on a Game Boy to encrypt it with, and a cart's owner can always read its
+own save RAM. Don't commit it or attach it to a bug report. The repo's
+`.gitignore` already excludes the whole emulator working directory,
+which is where BGB writes it.
+
+One new risk worth naming: on a mapperless ROM a stray write into
+`$0000-$7FFF` was harmless, and now it reaches the MBC — a write to
+`$2000-$3FFF` would switch ROM banks mid-execution. Checked: no literal
+ROM-address write exists anywhere outside `save.asm`. (The GBDK ROM has
+been running on MBC5 for a while and passes, which is the empirical
+half of the same answer.)
+
+Verified across a real power cycle by the project owner on 2026-09-08:
+password edited, console powered off, powered back on, field came back
+filled.
+
+
+## No session ritual (and why there was one)
+
+The Mobile Trainer capture that gave the pacing numbers also shows five
+sessions before the connection, four throwaway, with the config read at
+varying splits. That got implemented here as a prologue, and it was
+wrong twice over: it turned a timing reference into a behavioural
+feature, and it broke the primitives — a handshake test that performs
+four prior handshakes is no longer a handshake test.
+
+Removed. The sequence is recorded as an observation in
+`gbdk/docs/protocol-notes.md`; what the capture was actually for is the
+receive pacing, which stays. `MagbReadConfig` is back to the fixed
+`0x60+0x60` split it always used.
+
+
+## Runtime status, 2026-09-08
+
+Every test in both ROMs passes against the real REON server:
+
+| test | GBDK | RGBDS |
+|---|---|---|
+| ADAPTER/SESSION | pass | pass |
+| READ CONFIG | pass | pass |
+| TAMAGO EGG | pass | pass |
+| SMALL BUFFER | pass | pass |
+| BIG BUFFER | pass | pass |
+| TRAINER HOME | pass | pass |
+| EMAIL SEND | pass | pass |
+| EMAIL RECV (incl. delete) | pass | pass |
+| P2P CALLER / LISTENER | pass | pass (earlier run, see below) |
+| SERVER CONF: AUTH PREFIX | pass | pass |
+
+The cartridge save was confirmed across a real power cycle on the same
+day, on both ROMs. The one thing with no pass/fail of its own is RAW
+TCP, which is an interactive viewer rather than a scripted test.
+
+Added after that table, and since verified on both ROMs the same day:
+SERVER CONF / AUTH PREFIX -- see "Server conformance" below.
+
+Worth remembering about EMAIL RECV: it deletes **only** messages
+carrying its own subject, and reads headers with `TOP n 0` rather than
+fetching bodies. The real Mobile Trainer does the opposite — it `RETR`s
+what it downloads and deletes all of it. The difference is deliberate:
+this test runs against the owner's real mailbox, and a test that removed
+everything it found would delete real mail.
+
+
+## Server conformance: AUTH PREFIX (`src/app/big_buffer.asm`)
+
+`BbRunAuthPrefix::`, reached from a new **main-menu** item ("SERVER
+CONF") rather than from the ISP/HTTP submenu. That placement is the
+design, not a convenience: every ISP/HTTP target passes when the
+adapter, libmobile and the link behave, and this one passes when the
+*server* is correctly configured. It can fail while the adapter is
+perfect, and a red result that could mean either would be worse than no
+test at all.
+
+It rides `RunBufferTestCommon` (`main.asm`) like the two buffer tests,
+so the entire session harness — Begin Session, Read Identity, Dial, ISP
+Login, DNS, teardown — is shared; only the title and the transfer
+routine differ. Adding it cost no session code.
+
+What it does: unauthenticated GET against the SMALL BUFFER endpoint to
+collect a real challenge, `BbChallengeAuth` to build the correct
+`Authorization`, then damage it in place in `wGb00Authorization` before
+`BbBuildSmallAuthReq` copies it into the request — keep the first
+`GB00_AUTH_PREFIX_LEN` (44) characters, flip every one of the remaining
+48 between `"A"` and `"B"`. Close, reopen (REON requires a fresh
+connection for the authenticated retry), send, judge.
+
+Why flip rather than fill: a fixed filler could in principle coincide
+with the real tail, and a negative test that silently sent a **valid**
+credential would pass while proving the opposite of what it claims.
+Flipping changes all 48 by construction. Both are base64 characters, so
+the value still decodes — to the wrong bytes — and the length is
+unchanged, so the request is well-formed in every respect except the
+credential.
+
+Outcomes:
+
+| response | result |
+| --- | --- |
+| `200` | FAIL `BYPASS OPEN`, with `HTTP 200` on the second line |
+| `401` + `Gb-Status` | PASS, detail `GB-ST <value>` |
+| `401`, no `Gb-Status` | FAIL `CHALLENGE EXPIRED` — inconclusive, not a pass |
+| served with no challenge | FAIL `NO CHALLENGE` — fixture problem, not a finding |
+
+`Gb-Status` is what is asserted on rather than the bare `401`, because a
+401 alone cannot separate a verdict on the credential from an expired
+challenge. The value is displayed, not just tested, so a server that
+someday answers a different code is visible instead of being flattened
+into the same PASS. `BbFindGbStatus` already existed for SMALL BUFFER's
+upload leg.
+
+Space after adding it: ROM0 4001 free, ROMX 8515 free. Still 32 KiB.
+
+**How this test could pass while proving nothing.** It is only
+meaningful if the 44-character prefix is correct and only the tail is
+wrong. A miscomputed offset that spilled into the prefix would still be
+rejected — damaged prefix misses the cache, full validation runs, same
+`401 + Gb-Status` — and the test would report PASS without ever
+exercising the case the fix is about. The prefix is correct by
+construction here (`Gb00BuildAuthorization` builds the whole value from
+the real challenge, then bytes 44..91 are overwritten in place), and
+SMALL BUFFER's own PASS covers it indirectly by sending the undamaged
+value from the same builder. Neither is an independent check inside this
+test. REON now logs a per-request boolean that closes it from the server
+side (`224b47c`); the self-proving client-side version — valid
+Authorization first requiring 200, then the damaged one requiring 401 —
+is the better answer and is what this should become if the GBDK build
+ever gains the ~60-80 bytes it needs. See
+`gbdk/docs/protocol-notes.md` for the verification that showed all three
+failure shapes answer an identical 401.
+
+**Runtime-verified, 2026-09-08 (15:00:59-15:01:00).** `GB-ST 201` on
+screen, and the server's prefix boolean reading *matches* for that same
+request — both halves. GBDK passed identically two minutes earlier.
+
+That agreement is the useful part, not the PASS. The two implementations
+compute the corruption offset independently — C indexes into the built
+header string, this one overwrites `wGb00Authorization` in place — so a
+divergence would have shown up precisely here, and a PASS on screen
+would not have revealed it. Both logged *matches*, so both got the
+offset right. See `gbdk/docs/protocol-notes.md` for the full log and for
+why the forged tail reads as almost all `A`.

@@ -30,6 +30,12 @@ covers:
 All of these must pass before touching anything downstream of the
 packet layer. They're fast enough to run after every protocol change.
 
+`make test` also builds and runs `tests/host/test_fmt.c` +
+`src/protocol/magb_fmt.c` (the explicit decimal/hex formatters used to
+build wire strings), which covers the zero-padding cases a `"%x"` gets
+wrong -- a checksum of `0x0F00` must go out as `"0F00"`, and that only
+shows up for one value in sixteen.
+
 `make test` also builds and runs `tests/host/test_config.c` +
 `src/protocol/magb_config.c` (the configuration-blob parser --
 checksum validation, Configuration Slot BCD phone decode). Most of its
@@ -51,8 +57,13 @@ message rather than failing; the synthetic checks (and all of
 
 ## Manual tests against BGB + libmobile-bgb + libmobile
 
-This is the primary target environment and the one to use for Tests 1
-and 2.
+Everything below also applies to a real Game Boy Color with real
+adapter hardware (a PicoAdapterGB, which is what most of this
+project's later runtime verification actually used) — from the ROM's
+side nothing differs, since it speaks ordinary MAGB traffic and takes
+no emulator-specific shortcut. BGB is the easier environment to start
+in, because it gives you a serial log to compare against the ROM's own
+trace viewer.
 
 1. Build the ROM (`make GBDK_HOME=/path/to/gbdk-2020/gbdk`, see the
    README for details) — `build/mobile_adapter_testsuite_gbdk.gbc`.
@@ -83,6 +94,106 @@ and 2.
    HTTP path works; only a `NO HTTP/ PREFIX` or an earlier-stage
    failure (`DIAL ISP FAILED`, `DNS QUERY FAILED`, ...) indicates an
    actual break in the chain, and the detail line says which stage.
+
+### The tests that authenticate
+
+**Tamago Egg**, **Trainer Home** and **Raw TCP** need no credentials.
+Everything else does:
+
+| test | needs |
+| --- | --- |
+| Small Buffer | ISP password + the `server/` fixture, REON `doAuth(2)` |
+| Big Buffer | ISP password + the `server/` fixture, REON `doAuth(1)` + type-0 upload |
+| Email Send / Email Recv | ISP password, a real SMTP/POP3 account |
+
+Set it from the main menu's **ISP PASSWORD** entry before running any
+of them. It starts **empty on a fresh cartridge and stays empty until
+you type it** — there is no compiled-in default, and a test that needs
+one fails with `SET ISP PASSWORD` rather than sending a guess. (An
+earlier build did default it to `"test"`, and that masked a real
+server-side 401 behind a misleading symptom for a full day.)
+
+Once entered it is written to battery-backed cartridge SRAM and
+restored at the next boot, so this is a once-per-cartridge step, not a
+once-per-session one. **That means the `.sav` next to your ROM contains
+a real account password in plain text** — the repo's `.gitignore`
+excludes the whole `emulador/` directory for this reason. Don't commit
+it and don't attach it to a bug report.
+
+The two buffer tests also need REON to be serving the synthetic
+MAGBTEST endpoints. They are checked in under [`server/`](../../server/)
+precisely so the tests are reproducible on any REON host rather than on
+one particular person's — see [`server/README.md`](../../server/README.md)
+for installation, including the one change `download.php` needs.
+
+**Email Send delivers inside REON, not to the outside world.** It sends
+to the address in the adapter's own configuration. Mail actually
+*leaving* REON for an external mailbox goes through a device-authorization
+gate that is broken upstream in libmobile as of 2026-09-08 — see
+`docs/protocol-notes.md`, "Outbound mail is gated by device-auth". If
+you point this test at an external address and get a 554, that is not
+this ROM.
+
+**Email Recv deletes only its own messages.** It reads headers with
+`TOP n 0` and issues `DELE` only for subjects matching its own, unlike
+the real Mobile Trainer, which `RETR`s what it downloads and deletes
+all of it. This runs against a real mailbox; a test that removed
+everything it found would delete real mail. `DELE` only marks — the
+`QUIT` commits — so a failure partway through leaves the mailbox alone.
+
+**Email Recv sends plain `USER`/`PASS`, on purpose, and this must not
+change.** REON's server started speaking standard APOP on 2026-09-12 —
+that changed nothing a real cartridge sends. libmobile is the layer
+that translates: with a `device_auth_key` provisioned in the adapter's
+`mobile_config.bin`, it answers the `USER` line itself and turns `PASS`
+into a real APOP exchange, invisibly to the game. Without that key it
+forwards the plaintext password as-is, and the server refuses it. If
+this test fails, check the adapter's config for that key (and that it
+was downloaded after 2026-09-12 — the key's offset moved) before
+suspecting the ROM. See `docs/protocol-notes.md`, "Why EMAIL RECV sends
+plain USER/PASS, and always should", for the full mechanism.
+
+### Server conformance (SERVER CONF)
+
+Its own main-menu entry, on purpose. Every test above passes when the
+adapter, libmobile and the link behave; this one passes when the
+**server** is correctly configured, and can fail while the adapter is
+perfect. Keeping it out of the ISP/HTTP list is what stops a red result
+from being ambiguous about which side is broken.
+
+One test today, **AUTH PREFIX**. It builds a valid GB00 `Authorization`,
+keeps the 44-character prefix (which is only an echo of the challenge
+the server itself published), replaces the rest, and requires a refusal:
+
+| what you see | what it means |
+| --- | --- |
+| `PASS`, `GB-ST 201` | the server validated the whole credential and rejected it |
+| `FAIL BYPASS OPEN` + `HTTP 200` | this server accepts a prefix-only credential — the bypass is open |
+| `FAIL CHALLENGE EXPIRED` | inconclusive, not a pass: the challenge was gone, so nothing judged the credential. Just run it again |
+| `FAIL NO CHALLENGE` | the endpoint served without asking for auth — a fixture problem, not a security finding |
+
+Needs the ISP password set, like the other authenticating tests: a
+*valid* Authorization has to exist before it can be damaged, or the
+request would be refused for a reason unrelated to the prefix.
+
+**A PASS on its own is half the claim — check the server log too.** It
+says the server rejected a credential whose *tail* was wrong. That the
+*prefix* was right is guaranteed by construction, not by anything this
+ROM can observe: a wrong offset would be rejected identically, and the
+test would still say PASS while never exercising the case the fix is
+about. REON logs a per-request boolean for exactly this (does the
+44-character prefix correspond to a challenge it issued); the run counts
+when that says it matched. Running SMALL BUFFER in the same session
+covers the same ground from this side, since it sends the undamaged
+value from the same builder and needs a 200. See
+`docs/protocol-notes.md`, "The way this test could pass while proving
+nothing".
+
+**Runtime-verified on both ROMs (2026-09-08), with both halves:** each
+showed `PASS` / `GB-ST 201`, and the server log for each of those
+requests recorded the prefix boolean as *matches*. SMALL BUFFER passed a
+minute earlier in each session, which is the contrapositive — same
+builder, undamaged value, `200`.
 
 ### Read Configuration
 

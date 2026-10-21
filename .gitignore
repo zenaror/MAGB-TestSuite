@@ -20,5 +20,8 @@ config.bin
 # see gbdk/docs/protocol-notes.md) used as research material by both
 # implementations. Not part of this repository.
 /references
+
+# Local index cache only; canonical project memory lives in the central OMM.
+.omm/
 # Local history-rewrite backups and isolated preparation repositories.
 /.history-preparation/

@@ -38,8 +38,9 @@ TestSuite always transmits `0x83` (see `serial_transfer_byte()` in
 
 `serial_hw_init()` checks `_cpu == CGB_TYPE` (GBDK's own constant, from
 `include/gb/cgb.h`) before doing anything else, and calls `cpu_fast()`
-unconditionally afterward. If the console is not a CGB, the ROM prints
-a fatal message and halts forever (`fatal_not_cgb()`) rather than
+only once that passes. On anything else it changes nothing and returns
+`false`; `main()` then shows a fatal message and halts forever
+(`ui_fatal_not_cgb()`) rather than
 continuing in DMG speed — mixing DMG CPU speed with the `SIOF_SPEED_32X`
 serial bit does not correspond to any real Mobile Adapter GB
 configuration, and the project brief explicitly requires refusing to
@@ -135,10 +136,17 @@ VBlank ISR trampoline at `0x0040`-`0x0047`, not crashed) but rendered
 using an undefined palette that showed as a blank white screen on both
 BGB and a real Everdrive GB X7 — identical symptom on both, since it is
 a software bug, not an emulation or flash-cart quirk. Fixed by calling
-GBDK's `set_default_palette()` (`gb/cgb.h`) in `serial_hw_init()`
-immediately after `cpu_fast()`, once `_cpu == CGB_TYPE` is confirmed
-(its own documented precondition) — it sets CGB palette 0 to the same
-white/light-gray/dark-gray/black scheme DMG uses by default.
+GBDK's `set_default_palette()` (`gb/cgb.h`) — it sets CGB palette 0 to
+the same white/light-gray/dark-gray/black scheme DMG uses by default.
+
+The call lives in `ui_init()`, the app layer's display bring-up. It
+was originally inside `serial_hw_init()`, which is how a serial-port
+module came to depend on `<gbdk/console.h>` and `<stdio.h>`: a palette
+call, then a fatal-error screen to go with it. Both moved out (the
+screen is `ui_fatal_not_cgb()` now). Nothing about the fix changed —
+only which layer owns it, so `src/hw/serial_hw.c` can be lifted into a
+program that draws its own screens, or none. See
+`docs/integration-guide.md`.
 
 ## Timeout strategy (Section 7)
 
@@ -685,9 +693,11 @@ ISP Login/DNS Query, then `get_news_parameters_bin()`
 (`config.php` -- news size, the SRAM address to store it at, and the
 ranking-submission SRAM layout) followed by `get_news_file()`
 (`100.news.php` -- the actual news content), each with its own GB00
-challenge/response over its own TCP connection. "NEWS CONFIG" remains
-available separately as an isolated single-request diagnostic
-(`test_isp_http_gb00()`).
+challenge/response over its own TCP connection. A standalone
+"NEWS CONFIG" test used to exist as an isolated single-request
+diagnostic for just the config fetch (`test_isp_http_gb00()`) --
+removed once "NEWS ARTICLE" already exercised that same fetch on its
+way to the article, making it redundant.
 
 This deliberately does **not** rely on REON's optional 15-minute
 utility-auth session cache (`auth.php`'s
@@ -703,8 +713,8 @@ close-then-reopen TCP connections, which was never independently
 verified.
 
 A shared `gb00_fetch()` helper (`test_runner.c`) implements "GET, if
-401 then challenge/respond, GET again" once; both
-`test_isp_http_gb00()` and `test_isp_news_article()` call it per URL.
+401 then challenge/respond, GET again" once; `test_isp_news_article()`
+calls it per URL.
 
 **Credentials**: `validateAuthData()` looks up the account by
 `dion_ppp_id` and checks the password against the same
@@ -748,17 +758,38 @@ Configuration Data" above); the password is not (no password field
 exists anywhere in the documented 192-byte layout), so it can't come
 from Read Config no matter what. Originally this used a compile-time
 `TEST_ISP_PASSWORD` constant; per the project owner's explicit request
-("a senha deve ser perguntada para o usuario"), there is now an
+("the password should be asked of the user"), there is now an
 "ISP PASSWORD" main-menu entry (`ui_edit_text()` in `src/app/ui.c`, a
 character-cycling text editor modeled on the existing P2P-number
 digit editor) that edits a session-wide RAM buffer
-(`isp_password[]` in `main.c`, seeded from `TEST_ISP_PASSWORD`) used
-by every ISP-touching test. This still needed no mapper/save: the
-buffer is plain RAM, reset to the compile-time default on power-off,
-and this TestSuite's cartridge type stayed `0x00` (ROM ONLY, no MBC,
-no battery-backed SRAM). A real MBC with save RAM (e.g.
-MBC5+RAM+BATTERY) would only be needed if the password had to survive
-a power cycle, which was never asked for.
+(`isp_password[]` in `main.c`) used by every ISP-touching test. It
+starts EMPTY — there is deliberately no `TEST_ISP_PASSWORD` default,
+because a guessed placeholder hid every real 401/`-ERR` behind a
+confusing symptom for a full day; tests that actually authenticate now
+refuse to run at all (`require_password()`) rather than send something
+made up.
+
+It no longer resets on power-off. The ROM grew a mapper for **code
+space** (see "ROM banking" below), and once MBC5 was there,
+battery-backed RAM was a header byte away — cartridge type is now
+`0x1B` (MBC5+RAM+BATTERY) with one 8 KiB bank, and `src/app/save.c`
+keeps the password across power cycles.
+
+What did *not* change is the refusal to guess. There is still no
+compile-time default: a cartridge that was never written, whose battery
+died, or whose record fails its magic/version/checksum check loads as
+empty, and the authenticating tests still refuse to run. The stored
+record is validated before a single byte is handed back, because
+uninitialized cart RAM is arbitrary bytes and "looks like a password"
+is not good enough — silently loading garbage would recreate the exact
+failure mode that made the old guessed default worth deleting.
+
+The password is stored verbatim: on an emulator that means a plain
+`.sav` next to the ROM. There is nothing on a Game Boy to encrypt it
+with, and a cart's owner can always read its own save RAM, so the file
+should be treated as holding a real account credential — not committed,
+not attached to a bug report. The repo's `.gitignore` already excludes
+the whole emulator working directory, which is where BGB writes it.
 
 ## P2P: direct-IP dialing and relay-based calls are different mechanisms
 
@@ -904,3 +935,827 @@ sequence this document describes above, which is the 8-bit sequence
 real GBC hardware and libmobile's 8-bit path implement. This TestSuite
 never sends `MAGB_CMD_SIO32` and never switches out of 8-bit
 `SIOF_SPEED_32X` GBC serial mode.
+
+## ROM banking (MBC5), and the two traps that come with it
+
+Not protocol, but it constrains where protocol code may live, and both
+failure modes below are silent at build time and fatal at runtime.
+
+The GBDK ROM was mapperless (cartridge type `0x00`, 32 KiB) until the
+BIG BUFFER test needed roughly 4 KiB more than the 826 bytes left. It
+is now **MBC5, cartridge type `0x1B` (MBC5+RAM+BATTERY)** with one
+8 KiB RAM bank. The mapper was added for code space alone; the RAM and
+battery came afterwards, once it was there anyway, to persist the ISP
+password (see the GB00 section above and `src/app/save.c`).
+
+MBC1/MBC2/MBC3/MBC5 were all checked against the installed `bankpack`
+before choosing (bank ceilings 127 excluding `0x20`/`0x40`/`0x60`, 15,
+127 and 255 respectively). MBC5 is the one documented as guaranteed to
+work in CGB double-speed mode, which this ROM runs in — that decided
+it. MBC3 would also have fit and has Pokémon Crystal as precedent.
+
+Exactly **one** translation unit is banked: `src/app/gb00_auth.c`
+(`#pragma bank 255`, ~5 KiB of MD5/base64/GB00 code), chosen because it
+is nearly self-contained and sits at the leaf of the call graph. Its
+four exported functions carry `BANKED` on **both** prototype and
+definition; a mismatch there compiles cleanly and jumps into the wrong
+bank at runtime. An earlier, much wider `-autobank` attempt that let
+bankpack scatter modules across banks without those annotations built
+fine and hung on a blank screen; it was reverted.
+
+The two traps, both of which bit this ROM and are now covered by
+`make check-banking`:
+
+1. **The non-banked code does not fit in bank 0.** It is ~30 KiB, so
+   the linker lays `_CODE` out flat across banks 0 *and* 1. That works
+   only because MBC5 maps bank 1 at reset and we normally never leave
+   it — but it means everything above `0x3FFF` is displaced for as long
+   as a banked module is mapped in. "Non-banked" here does **not** mean
+   "always reachable".
+
+2. **The bank trampoline was itself in the switchable window.** GBDK
+   emits `_CODE` before `_HOME`, which placed `___sdcc_bcall_ehl` at
+   `0x76E1`. The instant it wrote bank 2 to the MBC5 register it
+   unmapped itself, and the CPU carried on executing whatever
+   `gb00_auth` happened to have at that address. Fixed by pinning
+   `-Wl-b_HOME=0x0200` and starting `-Wl-b_CODE=0x0C00` after it, which
+   puts the trampoline at `0x097C`.
+
+Consequently `gb00_auth.c` calls **nothing** outside its own bank — it
+carries local copies of `memcpy`/`strlen` rather than `<string.h>`'s,
+which the linker had placed at `0x6DF2` and `0x7732`. Interrupts are
+fine as-is: the `0x40`/`0x48` vectors dispatch into crt0 code below
+`0x1000`, and the serial IRQ is unused (this ROM polls `SC_REG`), so no
+ISR path is ever unmapped.
+
+`make check-banking` fails the build if the trampoline lands at or
+above `0x4000`, or if `gb00_auth.c` gains any external reference other
+than the trampoline. `bankpack` is pinned with `-Wb-min=2` so banked
+modules never land in bank 1, where the flat `_CODE` already lives.
+
+The RGBDS ROM needs none of this — it is hand-written assembly with
+~12.6 KiB still free in ROMX bank 1 and no mapper change.
+
+## GB00: download and upload do NOT authenticate the same way
+
+Confirmed by reading REON's own `web/cgb/auth.php` and
+`web/htdocs/cgb/{download,upload}.php`, after a real run where the
+BIG BUFFER upload leg failed while its download leg passed.
+
+`doAuth($type)` issues the same `WWW-Authenticate: GB00` challenge in
+every case, but what it does *after* a valid `Authorization` depends on
+the type, and the callers pass different ones:
+
+| endpoint | call | on success |
+|---|---|---|
+| `download.php` | `doAuth(1)` | **returns** the session id; the script then serves the file, so the authenticated GET carries the content |
+| `news/NN.news.php` | `doAuth(2)` | **returns** the user id; the script outputs content directly |
+| `upload.php` | `doAuth()` (type 0) | sets `Gb-Auth-ID: <id>`, sends `200`, and **`exit()`s** — the request body is discarded |
+
+So an upload is **three** requests, not two:
+
+1. `POST` with no auth → `401` + `WWW-Authenticate: GB00 name="..."`
+2. `POST` + `Authorization: GB00 name="..."`, **`Content-Length: 0`** →
+   `200` + `Gb-Auth-ID: <id>`, empty body
+3. `POST` + `Gb-Auth-ID: <id>` + the real `Content-Length` and body
+
+`upload.php`'s own header comment states this outright: *"the server
+responds with 200 OK and a `Gb-Auth-ID` header ... The game then sends
+its POST request and includes the same `Gb-Auth-ID` header."*
+
+Sending the body on step 2 is not merely wasteful — it is dropped, and
+the server then answers step 2's headers rather than an upload verdict,
+which looks exactly like a failed upload. Both ROMs originally did that.
+
+Two smaller facts from the same source, worth not re-deriving:
+
+- Auth is keyed off a **cost prefix** on the filename, not the
+  directory: `getCost()` takes the leading dot-separated component and
+  requires it to be numeric. `0.bigbuffer.cgb` therefore *does* require
+  auth (cost 0, which `addCostToAccount()` then skips), which is why
+  that name was chosen for the test fixture.
+- `doAuth` runs **before** the file is looked up. A `401` from an
+  endpoint is therefore no evidence that the requested file exists —
+  a missing fixture and a present one challenge identically.
+
+The session id is `bin2hex(random_bytes(16))`, 32 characters today.
+Neither ROM assumes that width: both parse `Gb-Auth-ID` as an opaque
+token up to a generous cap and refuse rather than truncate past it.
+
+### The MAGBTEST fixture (server-side, confirmed)
+
+REON has no shared git remote — the production server is the only place
+these files exist, so a local checkout can never answer "does this
+fixture exist?". Confirmed by the person running that server:
+
+- `web/cgb/download/01/MAGBTEST/0.bigbuffer.php` serves 8192 bytes,
+  `body[i] == i & 0xFF`, with `X-Test-Checksum: F000`. The `.cgb` in the
+  requested path resolves to `.php` through `core.php`'s
+  "file doesn't exist, try .php" fallback.
+- `web/cgb/upload/01/MAGBTEST/0.bigbuffer.php` recomputes the same
+  16-bit additive sum over the POSTed body, compares it against the
+  request's `X-Test-Checksum`, and `echo`es `"\x01"` on a match or
+  `"\x00"` otherwise. It also returns its own computed value in the
+  response's `X-Test-Checksum`, so a rejection says what the server
+  actually received rather than only that it disagreed. Both ROMs show
+  that value beside their own on failure.
+
+`F000` is independently derivable and worth keeping as a regression
+constant: the body is 32 complete 0..255 ramps, and
+`32 * (255*256/2) = 1044480`, which is `0xF000` mod 65536.
+
+**Confirmed working end to end on 2026-09-07** against the real server:
+`DL 8192 B OK` / `UPLOAD OK` / `CODE:32-200`. Both the streamed download
+checksum and the server's re-derivation of the uploaded body agreed.
+
+The earlier crash on this test (`PC=0x0038`, switchable window full of
+filler) was the 32 KiB overflow, confirmed by the same run passing on
+the 64 KiB MBC5 build. It presented as "only BIG BUFFER crashes" because
+its code, being the most recently added, was the part that sat past the
+boundary -- every older test's code was below it and intact. The
+bank-trampoline problem found while investigating was real and worth
+fixing, but it was not this crash: it would have taken NEWS ARTICLE down
+with it, since that test calls the same banked functions.
+
+### A 401 on the upload's third request is not a timing problem
+
+Worth writing down because the obvious guess is wrong, and this project
+has already spent days on a wrong guess about timing.
+
+Requests 2 and 3 of an upload are coupled through a PHP session: request
+2 writes the `Gb-Auth-ID`, request 3 reads it. That *looks* like it
+could race — the ROM sends request 3 as fast as it can, with no pause —
+and a real race of exactly that shape does exist elsewhere in REON (its
+POP3 `+OK` for `PASS` is emitted outside the callback that populates the
+maildrop, so a fast client can get `STAT 0 0` on a full mailbox).
+
+It cannot happen here, structurally rather than by luck of timing. The
+session file is written during PHP's shutdown, which runs even when the
+script leaves via `exit()` — which is exactly how `doAuth` type 0
+returns. PHP-FPM only reports end-of-request to nginx after that
+shutdown completes, so by the time the `200` + `Gb-Auth-ID` reaches the
+Game Boy, the session is already durable. The one function that would
+break this is `fastcgi_finish_request()`, which ends the response early
+and lets the script keep running; it appears nowhere in REON's web tree
+(verified by grep on the local checkout, and by the person running the
+production server, which is a separate tree — see the fixture note
+above). Output buffering and the `files` session handler don't open a
+window either, because the FPM decides when the request ends, not the
+output flow.
+
+So if an instrumented run ever shows a `401` on request 3, look at the
+`Gb-Auth-ID` itself — missing, wrong, or a session already destroyed —
+and not at how fast the ROM sent it.
+
+One asymmetry to check first if session behaviour ever does get strange:
+`serveFileOrExecScript()` calls `session_write_close()` only when it was
+*not* given a session id, so the download path (type 1, which passes
+one) leaves the close to shutdown while other paths close explicitly.
+Safe for the same reason as above, but it is a real difference between
+the two legs.
+
+## Pacing: the TestSuite deliberately does not run flat out
+
+Measured, not guessed. A millisecond-timestamped BGB capture of the
+**real Mobile Trainer**, relayed by the person running the REON server:
+
+| what | measured |
+|---|---|
+| between data blocks of one HTTP transfer | 389, 389, 391, 405, 418, 336 ms |
+| idle polling after a transfer finished | 929–1067 ms, for 11 s |
+| request split into three sends | +35 ms, +80 ms |
+
+The first row is the important one: Mobile Trainer does **not** pull as
+fast as the link allows. It takes a block, processes it, and only then
+asks for the next. Both ROMs now wait ~400 ms between receive polls on
+the HTTP paths (`TEST_PACING_RECV_FRAMES` / `MAGB_PACING_RECV_FRAMES`,
+24 VBlanks), and both handle a zero setting as "no wait at all" so a
+stress run can have the old behaviour back:
+
+```sh
+make CFLAGS_EXTRA='-DTEST_PACING_RECV_FRAMES=0'   # gbdk
+```
+
+Why a diagnostic ROM should care: running flat out exercises timing
+paths no real client ever takes, and stops exercising the ones it does.
+
+**Two places deliberately still run flat out**, and the reasons are
+different:
+
+- **SMTP/POP3 line receive.** The measurements above are of HTTP block
+  transfers, and no comparable capture of a line-at-a-time protocol
+  exists — pacing these would mean inventing a number, which is the
+  opposite of what the HTTP pacing is. Running them flat out also has
+  value of its own: REON had a race here (`+OK` for `PASS` emitted
+  outside the callback that populates the maildrop, so a fast client got
+  `STAT 0 0` on a full mailbox) that a paced client would never have
+  reached. It has since been fixed upstream, but this TestSuite exists
+  to validate any adapter or REON-compatible service rather than one
+  server, and the fast regime is where that class of bug lives.
+- **RAW TCP's live view.** It is an interactive window onto whatever
+  someone types at `nc`, not a fidelity test; a one-second poll would
+  make it feel broken. It stays at one frame.
+
+Not reproduced here: Mobile Trainer's pre-connection ritual (short empty
+sessions, EEPROM reads of varying length, multi-second gaps). That
+changes what a test *is* rather than how fast it runs, and belongs in a
+test of its own.
+
+## What a real Mobile Trainer does before it dials (observed, not implemented)
+
+The same timestamped BGB capture that gave the pacing numbers above also
+shows **five** sessions before the connection, four of them throwaway:
+
+```
+22.019  Begin -> End                    (43 ms, empty session)
+        ~2 s
+24.115  Begin -> Read Config -> End     (249 ms)
+        ~15 s
+39.511  Begin -> End                    (21 ms, empty session)
+        ~2 s
+41.587  Begin -> Read Config -> End     (299 ms)
+        ~2 s
+43.991  Begin -> Read Config -> Status -> Call -> PPP -> DNS -> TCP -> HTTP
+```
+
+with the config read split differently each time — `0x80+0x40` in one
+session, `0x60+0x60` in another, for the same 192 bytes.
+
+This is recorded because it is a real observation about how a
+commercial title drives the adapter, and the varying split in
+particular is worth knowing: an adapter implementation that only ever
+handles `0x60+0x60` would satisfy every request this TestSuite makes and
+still be wrong.
+
+**It is deliberately not implemented.** It was, briefly, and that was a
+mistake worth writing down rather than quietly reverting. Reproducing
+the sequence turned a timing reference into a behavioural feature: every
+test grew a ~25 s prologue, and — worse — the primitives stopped being
+primitives. A handshake test that performs four handshakes before the
+one it measures is no longer a handshake test; when the handshake breaks
+it fails inside the prologue and the result no longer says which one
+broke. Diagnostic isolation is what those tests are for.
+
+The capture was reference material for **rhythm**. What was actually
+wanted from it is the pacing above: the TestSuite was running flat out
+where a real client pauses. That is a property of how fast the tests
+move, and it applies everywhere; the session sequence is a property of
+one title's startup, and it belongs in this document rather than in the
+ROMs.
+
+## Wire-format numbers are built explicitly, not with sprintf
+
+**Correction, recorded rather than quietly edited: the reasoning that
+first justified this was wrong.**
+
+The SMALL BUFFER POST went out seven bytes short, and the two numeric
+conversions in `sprintf(..., "Content-Length: %u ... X-Test-Checksum:
+%hx%hx ...")` happen to sum to exactly seven characters (`128` +
+`1fc0`). That coincidence was taken as proof that SDCC had dropped both
+conversions. It had not.
+
+The seven bytes were the `s_bb_auth_header` overflow — the same one
+that produced the corrupted `Authorization` header in "An
+authentication bypass in REON's utility-auth cache" below. The intended
+value is 121 characters and the buffer was 112, so the tail spilled into
+`s_bb_auth_id`; writing `X-Test-User` ("34") there then put a NUL at
+index 114, and `strlen` returned 114 instead of 121 — **seven short**.
+Same number, entirely different cause.
+
+`%u` and `%hx` work. The result screens prove it: `DL 8192 B OK` and
+`MESSAGES: n` both print their numbers.
+
+The explicit formatters in `magb_fmt.h` were kept anyway, because the
+argument for them survives the correction being wrong:
+
+- The wire format is now **tested** (`tests/host/test_fmt.c`), including
+  the zero-padding cases (`0x0F00` must render `"0F00"`, never `"F00"`)
+  that bite one checksum value in sixteen and would otherwise wait to
+  fail confusingly much later.
+- Both ROMs now emit uppercase hex, so they put identical bytes on the
+  wire. They had disagreed, and only REON's `strtoupper()` hid it.
+
+But they were a precaution, not the fix, and the note that said
+otherwise would have sent the next reader hunting a compiler bug that
+does not exist.
+## The last send of a body must also receive
+
+`test_isp_small_buffer()`'s upload failed with `NO HTTP/ PREFIX` for a
+request the server had answered correctly. The BGB serial log shows why:
+
+```
+>>> 15 Transfer data (conn 0)     <- the 128-byte body
+    00 01 02 ... 7F
+<<< 15 Transfer data (conn 0)     <- the SAME exchange
+    HTTP/1.1 200 OK ... X-Test-Checksum: 0000 ... 00
+```
+
+One Transfer Data both sends **and** receives. A server quick enough — a
+small body to a server on the same machine — has its entire response
+arrive bundled with the very send that completed the request. The send
+discarded its output (`out_cap = 0`), so the response was lost, and the
+poll that followed found only Transfer Data End.
+
+This is the same bug `tcp_send_line()` had for the email tests, and the
+general shape is worth remembering: **on this protocol every send is
+also a receive, so any send that throws its output away can lose a whole
+response** — and whether it does depends only on how fast the peer is.
+
+The fix is narrow on purpose. `gb00_stream_request()` /
+`BbStreamRequest` already send, receive and stream correctly, so the
+*final* chunk of a body goes through them instead of through the
+discarding raw send. Nothing else changed: intermediate chunks still
+discard, which is safe because a server cannot answer before it has the
+whole declared `Content-Length`.
+
+An earlier attempt made *every* raw send accumulate into the shared
+response buffer instead. That broke both ROMs and was reverted. It is
+worth recording why, because the C and assembly versions failed
+differently and only one was obvious: in the RGBDS version the new code
+loaded `DE` with the accumulator offset to compute a receive cursor, and
+`DE` **is** that routine's data-pointer argument — so it started sending
+garbage. The lesson is not about that one register: widening a
+low-level, register-constrained routine's responsibilities is a much
+larger change than it looks, and the same fix expressed one layer up
+(let the existing send-and-receive path handle the last chunk) carries
+none of that risk.
+
+## An authentication bypass in REON's utility-auth cache (found, then fixed)
+
+Worth recording in full, because this TestSuite exists to validate
+REON-compatible services and this is the first real defect it produced —
+and because it was found *by accident*, through a bug of ours.
+
+The GBDK ROM had a ten-byte buffer overflow that put a corrupted
+`Authorization` header on the wire: the 92-character value truncated
+mid-base64, its closing quote and CRLF overwritten. Plainly malformed.
+
+`s_bb_auth_header` was `[16U + GB00_AUTHORIZATION_LEN + 4U]` = 112
+bytes, and holds `Authorization: GB00 name="` (26) + 92 + `"` + CRLF +
+NUL = 122. The `16` was a guess at the prefix length, which is 26. The
+overflow ran into `s_bb_auth_id`, and `X-Test-User` ("34") written there
+put a NUL at index 114 — which is also where the "seven missing bytes"
+above came from (121 − 114). The size is now derived from the literals
+with a compile-time assertion, verified by restoring the old 112 and
+watching the build fail.
+
+**The server answered `200` and reported the authenticated user.**
+
+That is what made the client bug so hard to find — the failure surfaced
+three layers later as a rejected upload — and it is also a defect in its
+own right. `auth.php`'s type-2 (utility) path derived the session id
+from `substr($authString, 0, 44)` and, on a cache hit inside the
+15-minute window, returned the cached user id **before decoding or
+validating the rest of the value**. Our truncation happened past
+character 44, so the prefix still matched and the response half was
+never checked.
+
+The REON maintainer reproduced it directly: a legitimate handshake, then
+the same request with everything after character 44 replaced by `A`.
+`HTTP 200`.
+
+The sharp edge is where those 44 characters come from. They are not the
+client's secret — they are an echo of the challenge **the server itself
+published in the 401**. Anyone who saw only the challenge response could
+derive the session id without ever observing a client credential. The
+protocol carries no encryption regardless, but this was a step *down*
+from "replay a captured Authorization", which is what the code's own
+comment implied.
+
+Fixed upstream: the cache now stores a SHA-256 of the entire
+`Authorization` value and compares it with `hash_equals`. A miss is not
+a rejection — it falls through to full validation, so the legitimate
+reuse the cache exists for still works. Verified end to end: challenge →
+401, valid auth → 200, same auth repeated → 200, prefix-only → **401**
+(was 200). Type 0 is unaffected and remains single-use.
+
+**What this changes for the TestSuite.** A `401` on SMALL BUFFER's reuse
+leg used to mean only "the 15-minute window expired". It can now also
+mean "the Authorization we sent was wrong" — which is a gain, not an
+ambiguity: the server's answer can finally detect client-side credential
+corruption, which is precisely what it could not do while a truncated
+header authenticated successfully.
+
+### The regression test, and why it is not an adapter test
+
+Both ROMs now carry **AUTH PREFIX**, which does deliberately what the
+overflow did by accident: takes a valid `Authorization`, keeps the
+44-character prefix, replaces everything after it, and requires the
+server to refuse.
+
+It lives under its own main-menu entry, **SERVER CONF**, not in the
+ISP/HTTP submenu. That separation is the point. Every test in ISP/HTTP
+passes when the adapter, libmobile and the link behave; this one passes
+when the *server* is correctly configured, and it can fail while the
+adapter is perfect. A red result whose meaning depends on which list it
+came from is exactly the ambiguity this ROM exists to remove.
+
+Three outcomes, deliberately distinguished:
+
+| response | verdict |
+| --- | --- |
+| `200` | **FAIL, "BYPASS OPEN"** — this server lacks the fix |
+| `401` + `Gb-Status` | **PASS** — full validation ran and rejected it |
+| `401`, no `Gb-Status` | **FAIL, "CHALLENGE EXPIRED"** — inconclusive, nothing judged the credential |
+
+`Gb-Status` is what is asserted on, not the bare `401`, because a 401
+alone cannot tell a verdict from an expired challenge. Its value is
+displayed rather than merely checked, so a server that someday answers a
+different code shows up instead of being flattened into the same PASS.
+
+Two implementation details that are easy to get wrong:
+
+- The tail is destroyed by flipping each character between `A` and `B`,
+  not by writing a fixed filler. A constant filler could in principle
+  coincide with the real tail, and a negative test that silently sent a
+  **valid** credential would pass while proving the opposite of what it
+  claims. Both are base64 characters, so the value still decodes — to
+  the wrong bytes. The length is unchanged, so the request is
+  well-formed in every respect except the credential.
+- "The server never challenged us" is reported as `NO CHALLENGE`, not as
+  a bypass. An endpoint that serves without asking for authentication is
+  a fixture problem; calling it a security finding would be a false
+  alarm.
+
+**Runtime-verified on both ROMs, 2026-09-08.** Both halves, on both
+implementations. Each showed `PASS` / `GB-ST 201`, and the server log
+for each of those requests recorded the prefix boolean as *matches —
+corresponds to a challenge issued*:
+
+```text
+GBDK   14:58:18  GET  no Authorization                        -> 401
+       14:58:19  GET  104 chars, 44-char prefix matches: YES  -> 401
+
+RGBDS  15:00:59  GET  no Authorization                        -> 401
+       15:01:00  GET  104 chars, 44-char prefix matches: YES  -> 401
+```
+
+That is case 1 of the table above — the only one in which the test
+proves what it claims. Neither landed on the middle case, *no challenge
+with that id*, which is the signature of an offset spilling into the
+prefix. And that is the point of running both: the two compute the
+offset independently (C indexes into the built header string, the
+assembly overwrites `wGb00Authorization` in place), so agreement here is
+two implementations confirming the same fact, not one confirming itself.
+
+The contrapositive ran a minute earlier in each session: SMALL BUFFER
+sent the *undamaged* value from the same builder — prefix matches AND
+tail valid — and got `200` on both its GET and its POST, the cache-reuse
+leg working on real traffic. Same builder, same session, differing only
+in the tail. That is what closes the inference.
+
+### Why the forged tail reads as almost all `A`
+
+Both logs showed the tail ending `AAAAAAAAAAA"`, which looks like a
+fixed filler — the very thing this deliberately avoids. It isn't, and
+the distinction is worth writing down because the log will keep looking
+like this.
+
+The transform is `c = (c == 'A') ? 'B' : 'A'` per character. It does not
+map everything to one symbol: every character that was not `A` becomes
+`A`, and every character that *was* `A` becomes `B`. Since a base64
+character is `A` about one time in 64, the result is mostly `A` **by
+construction**, with a `B` wherever the original had one.
+
+What matters is the property, and it holds: *every position differs from
+its original*, so the tail as a whole cannot coincide with the valid
+one — which a constant filler could, in principle. Checked on the host
+against a realistic tail, an all-`A` tail (which becomes all-`B`) and an
+alternating one: zero positions unchanged in every case. The all-`A`
+decode is 36 zero bytes — structurally valid base64 of the right length,
+so the server rejects it by comparison, not by failing to parse it.
+That, too, is required: a rejection at a parse step would be the wrong
+reason again.
+
+#### The way this test could pass while proving nothing
+
+Worth stating plainly, because it is not obvious and it is the only
+thing that would make a PASS worthless.
+
+The test is only meaningful if the 44-character prefix it sends is
+**correct** and only the tail is wrong. If an offset were miscomputed
+and the corruption spilled into the prefix, the server would reject the
+request anyway — the damaged prefix misses the cache, full validation
+runs, and the answer is the same `401 + Gb-Status: 201`. **The test
+would report PASS without ever exercising the case the fix is about.**
+
+Today the prefix is correct by construction (both ROMs build the whole
+value with the real challenge, then overwrite from
+`GB00_AUTH_PREFIX_LEN` onward) and, indirectly, by SMALL BUFFER passing
+in the same period — SMALL BUFFER sends the *undamaged* value from the
+same builder and gets a 200, which is what says the builder and the
+offsets are right. Neither is an independent check inside this test.
+
+Two ways to close it:
+
+1. **Server-side — done, REON `224b47c`.** REON logs only the last 12
+   characters of an `Authorization` deliberately, so the prefix never
+   reaches the log. Instead it now logs a boolean per request: does the
+   44-character prefix correspond to a challenge this server issued?
+   `auth.php` already derives the PHP session id from exactly those 44
+   characters, so the existence of that session file answers the
+   question without storing or comparing any value. Three outcomes:
+   matches; no challenge with that id; the 44 characters don't decode to
+   32 bytes at all.
+2. **Client-side, one extra request — not done.** Send the valid
+   Authorization first and require 200, then the damaged one and require
+   401, in the same session. Self-proving, needs no server help, and it
+   is where this test should end up. It costs one more request and about
+   60-80 bytes the GBDK build does not have (see the Makefile: 23 bytes
+   free below `0x8000`). When that happens the server-side boolean
+   becomes redundant, which is the right fate for instrumentation.
+
+**The verification is the interesting part.** The maintainer ran all
+three cases against the live server, and *all three answered an
+identical `401`*:
+
+| what was sent | HTTP | prefix boolean |
+| --- | --- | --- |
+| correct prefix, wrong tail | 401 | matches |
+| prefix with one byte changed | 401 | no challenge with that id |
+| prefix that doesn't decode to 32 bytes | 401 | doesn't decode |
+
+The middle row is the realistic one, and the reason this mattered: a
+wrong offset would produce still-valid base64 of the right length that
+simply isn't the challenge. From the ROM's side those three are
+indistinguishable — same status, same `Gb-Status`. **A negative test
+cannot tell "rejected for the reason I intended" from "rejected for a
+reason I caused" using only the response**, unless something outside the
+response says which. That is the general lesson, not a REON detail:
+when you assert that a server refuses something, make sure you can also
+show it refused it for your reason.
+
+Until the client-side version exists, read a PASS as "this server
+rejected a credential whose tail was wrong" plus, from the server log,
+"and the prefix was genuinely a challenge it issued".
+
+### The three kinds of 401
+
+They are not ambiguous on the wire, but there are **three**, not two —
+and the third is easy to miss because it lives outside `doAuth`'s
+authentication block:
+
+| response | meaning |
+|---|---|
+| `401` + `Gb-Status: 201` | the challenge existed and the credential did **not** match — the verdict |
+| `401` + `WWW-Authenticate:` | the challenge session is gone; not a verdict at all, but a fresh challenge inviting a new handshake |
+| `401` + **neither header** | the request carried a `Gb-Auth-ID` and the session it names is dead |
+| `200` | the window expired but the Authorization was intact — full revalidation passed and the request simply succeeded |
+
+The third comes from the `Gb-Auth-ID` validation that runs *after* the
+authentication block: `header_remove(); http_response_code(401);
+exit();`. It is reachable only on a request that carries that header —
+`doAuth` enters its authentication block **only when `Gb-Auth-ID` is
+absent** — which makes the disambiguation free:
+
+| what the ROM sent | `401` without `Gb-Status` means |
+|---|---|
+| `Authorization` | the challenge expired; redo the handshake |
+| `Gb-Auth-ID` | that session died; the credential and challenge are not implicated |
+
+So the ROM's own request state settles it, and only `Gb-Status` ever
+needs reading — which matters, because `WWW-Authenticate`'s value is ~57
+characters and both ROMs' token readers *refuse* an over-long value
+rather than truncating it. Branching on that header would have
+misclassified every time.
+
+Both ROMs report `AUTH REJECTED (201)`, `CHALLENGE EXPIRED` (the
+`Authorization` legs) or `AUTH ID REJECTED` (the upload's third
+request). The last one matters most: without it a dead session on the
+upload reads as `UPLOAD MISMATCH`, pointing at a payload the server
+never read — and that is exactly the request where this project's own
+bug lived.
+
+A negative test — deliberately send a prefix-only Authorization and
+require a 401 — would pin this as a regression test for any
+REON-compatible server. Not implemented; it is a real change in what the
+suite does and belongs to a deliberate decision, not a drive-by.
+
+## REON stores mail subjects capped at 10 characters
+
+Observed on the wire, not documented anywhere, and it silently broke the
+EMAIL RECV test's cleanup for its entire life.
+
+`TOP n 0` on a mailbox that had accumulated this test's own messages
+returned:
+
+```
+Subject: MAGB Te...
+```
+
+for a message this TestSuite had sent as `Subject: MAGB TestSuite`. Every
+other subject in that mailbox longer than ten characters was cut the same
+way (`Este as...`, `Acentua...`, `Re: Hel...`), while shorter ones
+(`Teste 01`, `Oi`, `Enviado A`) came back intact. So the rule is: ten
+characters, with the last three replaced by `...` when the original was
+longer.
+
+`delete_matching_test_emails()` looked for the full 23-character
+`Subject: MAGB TestSuite` and therefore never matched anything. It had
+never deleted a single message — the mailbox reached twenty accumulated
+test emails before anyone noticed, because "nothing to delete" and
+"nothing matched" printed the same screen.
+
+Two changes, and the split between them matters:
+
+- **What is sent** is now `MAGB TEST`, nine characters, so it fits inside
+  the cap and survives the round trip byte for byte. A test that cannot
+  recognise its own output is not much of a test.
+- **What is matched** is the shorter prefix `Subject: MAGB`, which also
+  recognises the truncated `MAGB Te...` that earlier runs left behind.
+  Without that the test could never clean up the mailbox it filled.
+
+### Where it comes from
+
+Confirmed by the REON maintainer: `mail/pop3Connection.js`,
+`SUBJECT_MAX_CHARS = 10` with `SUBJECT_ELLIPSIS = "..."` counted *inside*
+the ten. It is deliberate, and specified by the project owner.
+
+Two details worth knowing:
+
+- **It is not stored truncated.** `sys_inbox.message` keeps the whole
+  message with the original subject; the cut is applied while building
+  the view delivered over POP3 (`TOP` and `RETR`). The webmail still
+  shows the full subject. So what a Game Boy sees through `TOP` is a
+  *projection for the game*, not what is on disk — which matters if you
+  ever compare the two and think one of them is corrupt.
+- **The cut counts codepoints, not bytes** (`Array.from(text)` then
+  `slice`). That is not fussiness: a JIS subject is multibyte, and
+  cutting by byte would split a character and leave a dangling escape
+  sequence — a malformed header that a 2001-era parser has no way to
+  defend against. If you implement this yourself, cut on characters.
+
+**There are two different limits, and confusing them cost a round trip
+of questions.** Settled directly with the project owner:
+
+| limit | whose | applies to |
+|---|---|---|
+| 10 characters | REON's, in `pop3Connection.js` | the **subject**, on delivery to the game. Mobile Trainer does receive the shortened title. |
+| 12 characters per line | Mobile Trainer's own | how it wraps the message **body**. It handles this itself. |
+
+The cap stays — it is the owner's own requirement, not an accident. An
+earlier draft of this note said the truncation "does not affect Mobile
+Trainer"; that was about the body wrap, not the subject.
+
+### Only some headers reach the game at all
+
+Volunteered by the maintainer, and it closes off an obvious alternative
+design before anyone spends a day on it. The view built for the game
+keeps exactly these headers and discards the rest:
+
+```
+MIME-Version, From, To, Subject, X-Game-title, X-Game-code
+(+ Content-Type, which is generated)
+```
+
+So tagging a message with a custom header — `X-Test-Id:` or similar — to
+recognise it later **does not work**: the header never arrives. Matching
+on the subject is not a shortcut here, it is the only channel that
+survives, which is why getting the truncation right matters as much as
+it does.
+
+`DELE` is also a soft delete: messages get `deleted_at` set and move to a
+30-day trash rather than vanishing. Worth knowing before writing a test
+that deletes: a matching rule that turns out too broad is recoverable.
+
+### Message numbers are positions, so the listing's order is protocol
+
+POP3 addresses messages by number — `TOP n`, `RETR n`, `DELE n` — and
+those numbers are just positions in the maildrop listing. RFC 1939
+requires them to stay fixed for the whole session, which is why `DELE`
+only *marks* and renumbering happens at `QUIT`.
+
+That makes the server's ordering a protocol-visible decision, and REON's
+query had no `ORDER BY`: the numbering was whatever order the optimizer's
+chosen index produced. It happened to give arrival order, so it looked
+correct. Had the planner switched to the `(recipient, read_at)` index,
+reading a message in the webmail could have renumbered the mailbox
+between one sync and the next — and a client that had just scanned
+headers would then delete a different message than the one it matched.
+
+Fixed upstream with an explicit arrival-order sort. Nothing about the
+observed behaviour changed; it stopped being luck. If you implement a
+POP3 server for a Game Boy client, order the listing explicitly.
+
+### The general lesson
+
+**A test that recognises its own artifacts by an exact string is betting
+that nothing between here and storage rewrites it.** Mail systems rewrite headers
+routinely — folding, re-encoding, capping. Match a prefix you have
+actually seen come back, and prefer sending something short enough that
+there is nothing to rewrite.
+
+## Outbound mail is gated by device-auth, and that gate is broken upstream
+
+**Relayed 2026-09-08 by the session running the REON server, traced by
+the session running mGBA. Not reproduced or verified from this
+repository** — recorded here because it changes how to read an email
+failure today, not because this ROM implements any part of it.
+
+REON gates outbound mail (a message actually leaving REON for a real
+external mailbox) behind a device-authorization endpoint: libmobile
+tells REON `authorize` when a device starts using mail and
+`deauthorize` when it is done, and Postfix refuses to relay for a
+device sitting at `authorized=0`.
+
+The reported defect is an ordering one inside libmobile. The
+`authorize` event is *generated* mid-PPP-session, but the gate that
+dispatches those events only opens when the session goes idle. The
+`deauthorize` from the disconnect overwrites the still-pending
+`authorize` before it is ever sent. The server-side signature is
+unambiguous: 18 `deauthorize` and zero `authorize` in one day, every
+device stuck at `authorized=0`, and Postfix rejecting with 554.
+
+**What this means for this TestSuite's EMAIL SEND, precisely:** the
+test passes, and that is not a contradiction. It sends to the address
+in the adapter's own configuration — a REON-internal delivery, which
+never reaches the Postfix relay path this gate protects. A test that
+sent to an external address would fail today, and would fail for a
+reason that is neither in this ROM nor in REON's mail server.
+
+So: **do not treat a 554 on external mail as a TestSuite bug** while
+this is open. Check whether `authorize` ever arrived server-side
+before looking anywhere else.
+
+Related but distinct, and already fixed: a pending device-auth event
+could also starve behind a freshly started relay number-fetch, since
+both share one socket buffer (libmobile `935aec7`, mutual-exclusion
+gating in `mobile_actions_get()`). Same subsystem, different failure —
+don't assume one fix covers the other.
+
+A third, found server-side once the first was repaired (REON
+`dd65168`): a `deauthorize` arriving with the **same** counter as the
+last `authorize` was swallowed as an idempotent replay — 200 returned,
+device left authorized. Revocation failing silently. Now a revocation is
+honoured at an equal counter, while `authorize` still requires a
+strictly greater one.
+
+Three bugs in one subsystem, each exposed by fixing the one before it,
+is itself the note worth keeping: anti-replay rules that treat every
+message the same way get the asymmetry wrong. Granting access and
+withdrawing it do not deserve equal suspicion — the failure modes are
+not symmetric, and the safe default for a revocation is to honour it.
+
+## Why EMAIL RECV sends plain USER/PASS, and always should
+
+Relayed by the REON-server session 2026-09-12, sourced from libmobile's
+own `pop3_auth.c` (`72fac61`) — not verified against that source
+directly from here, but specific enough (exact function names, exact
+queued strings) to record as fact rather than as a claim.
+
+As of 2026-09-12 REON's POP3 server accepts standard APOP, not the
+`XAPOP` extension it used before. This did **not** change what a real
+cartridge sends, and does not change what this ROM should send either.
+The reason is architectural: **the game is immutable and always sends
+the plaintext password.** libmobile is the layer that adapts, invisibly
+to the game:
+
+```c
+case MOBILE_POP3_AUTH_USER:
+    if (p->has_key) {
+        queue_for_game(p, "+OK user accepted\r\n");   /* fake it locally */
+        /* the real USER is never sent to the server at all */
+case MOBILE_POP3_AUTH_PASS:
+    if (p->has_key) {
+        build_apop(...); queue_send(apop);            /* PASS becomes APOP */
+    } else {
+        queue_send(p, line, line_len, ...);            /* forwarded as-is */
+    }
+```
+
+`USER` never reaches the server when a `device_auth_key` is
+provisioned — libmobile answers `+OK user accepted` itself, matching
+the real server's own wording byte-for-byte (a POP3 client that
+doesn't recognize the reply text stops there, so the fake has to be
+exact). `PASS` is replaced with a real APOP challenge-response built
+from that key. The game — real cartridge or this ROM — never sees any
+of this; it just sent `USER <local>` / `PASS <password>` the same way
+it always has.
+
+**This is why `test_isp_email_recv()`'s plain `USER`/`PASS` is correct
+client behavior, not a gap to close.** A version of this ROM that spoke
+APOP directly would stop representing what a cartridge does and start
+testing a code path no cartridge ever exercises — the opposite of what
+a protocol-conformance TestSuite is for. Confirmed as the right call
+before this note existed: asked whether to implement APOP client-side,
+this session flagged it as a protocol change needing sign-off rather
+than just doing it — which is what left room for this correction to
+land before any code changed.
+
+**What actually decides whether EMAIL RECV can pass now:** whether the
+adapter's `mobile_config.bin` has a `device_auth_key` provisioned. No
+key means libmobile forwards the plaintext password unmodified (the
+`else` branch above), and the server refuses it — that failure is an
+**environment/provisioning problem**, not a suite defect, and it's easy
+to mistake for "the suite is testing something outdated" if this note
+isn't read first. Two things that separate the causes without
+guessing, both relayed from the same source:
+
+- `mobile_config.bin` needs to be one downloaded *after* 2026-09-12 —
+  the key moved to offset `0x165`. (`0x160`, quoted earlier from the
+  same source, was wrong and cost the mGBA session real time; corrected
+  here so it isn't repeated.)
+- libmobile's own log distinguishes the two paths directly: `faked
+  local ack` / `PASS seen, sending: APOP ...` means the key was used;
+  `forwarded (no key)` means it wasn't, and a server refusal downstream
+  of that line is expected, not a bug.

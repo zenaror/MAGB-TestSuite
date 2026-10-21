@@ -16,11 +16,14 @@
 ; ("GB00 HTTP authentication") for the full derivation. Not re-derived
 ; independently here; this is a faithful port of already-verified logic.
 ;
-; The actual code (not the WRAM state) lives in ROMX BANK[1], not ROM0
-; -- this is a mapperless 32KB cart (cartridge type $00, rgbfix -m 0x00),
-; so "BANK[1]" here just means the ROM's fixed upper 16KB ($4000-$7FFF),
-; always mapped, never bank-switched (there's no MBC to switch it, and
-; nothing here ever needs to). This was worth doing at all because
+; The actual code (not the WRAM state) lives in ROMX BANK[1], not ROM0.
+; This cart is MBC5 now (type $1B, rgbfix -m 0x1B) -- but the mapper is
+; there for the battery, not for space: the build is still 32KB, bank 1
+; is the only ROMX bank, and it is the bank MBC5 maps at $4000-$7FFF out
+; of reset. Nothing in this ROM ever writes a bank number, so "BANK[1]"
+; still just means the ROM's upper 16KB, always mapped. Anything that
+; ever adds a second ROMX bank has to revisit that. This was worth doing
+; at all because
 ; every other file in this ROM declares its code as plain ROM0, which
 ; RGBDS packs into the lower 16KB ($0000-$3FFF) only -- before this,
 ; the entire upper half of the physical ROM sat unused (all $FF
@@ -29,6 +32,7 @@
 
 INCLUDE "hardware.inc"
 INCLUDE "protocol.inc"
+INCLUDE "gb00.inc"
 
 ; ---- MD5 (RFC 1321) ---------------------------------------------------
 ;
@@ -995,9 +999,8 @@ Base64Alphabet:
 ; full derivation. Byte-for-byte ported from gbdk's gb00_bits_sorted()/
 ; gb00_rotate_encode()/gb00_build_authorization(), which were themselves
 ; round-trip-tested against REON's real PHP decode function.
-
-DEF GB00_CHALLENGE_LEN EQU 48
-DEF GB00_AUTHORIZATION_LEN EQU 92
+; The GB00_* sizes it works in terms of live in include/gb00.inc, shared
+; with big_buffer.asm.
 
 SECTION "Gb00 Scratch", WRAM0
 wGb00ChallengePtr: dw
@@ -1462,154 +1465,17 @@ Gb00BuildAuthorization::
 ; one bump behind gbdk's, which is exactly the kind of divergence this
 ; file's own comment above warns against re-deriving a number instead
 ; of copying gbdk's current one.
-DEF GB00_RESP_BUF_SIZE EQU 360
-DEF GB00_MAX_EMPTY_POLLS EQU 5
-; Comfortably covers the largest real request this ROM builds (News
-; Article's authenticated retry measures 238 bytes: prefix 122 + the
-; 92-char Authorization value + a 24-byte suffix -- confirmed by
-; counting the exact strings main.asm builds these from).
-DEF GB00_AUTH_REQ_BUF_SIZE EQU 250
 
 SECTION "Gb00 Fetch Scratch", WRAM0
-; Caller-set request descriptor -- see Gb00FetchOne's own doc comment.
-wGb00FetchNoAuthPtr:: dw
-wGb00FetchNoAuthLen:: db
-wGb00FetchAuthPrefixPtr:: dw
-wGb00FetchAuthPrefixLen:: db
-wGb00FetchLoginPtr:: dw
-wGb00FetchPasswordPtr:: dw
 
-; Results
 wGb00FetchStatusText:: ds 4 ; 3 digits + NUL, e.g. "200"
-wGb00FetchDidAuth:: db
-wGb00FetchFailMsgPtr:: dw   ; valid only when Gb00FetchOne returns MAGB_ERR_ISP
 
-wGb00RespBuf: ds GB00_RESP_BUF_SIZE
-wGb00RespLen: dw ; 16-bit: GB00_RESP_BUF_SIZE(360) exceeds a byte's range
-wGb00EmptyPolls: db
-wGb00FetchChallenge: ds GB00_CHALLENGE_LEN ; NOT NUL-terminated, matches
+wGb00RespBuf:: ds GB00_RESP_BUF_SIZE
+wGb00RespLen:: dw ; 16-bit: GB00_RESP_BUF_SIZE(360) exceeds a byte's range
+wGb00FetchChallenge:: ds GB00_CHALLENGE_LEN ; NOT NUL-terminated, matches
                                             ; Gb00BuildAuthorization's HL input
-wGb00AuthReqBuf: ds GB00_AUTH_REQ_BUF_SIZE
-wGb00AuthReqLen: db
 
 SECTION "Gb00 Fetch Code", ROMX, BANK[1]
-
-; Sends [DE]/[C] as one MagbTransferData, then polls with zero-length
-; reads (same shape as main.asm's HttpFetch) until Transfer Data End,
-; the response buffer fills, or GB00_MAX_EMPTY_POLLS consecutive empty
-; polls suggest the peer stalled. Requires [wTcpConnId] already set --
-; Gb00FetchOne's job, not this helper's.
-;
-; Input: DE = request bytes, C = request length (a byte -- every
-;        request this engine builds is well under 255)
-; Output: A = result (0=OK, transport-level only); wGb00RespLen holds
-;         the total bytes accumulated in wGb00RespBuf
-; Clobbers: everything
-Gb00HttpGetOnce:
-    xor a, a
-    ld [wGb00RespLen], a
-    ld [wGb00RespLen + 1], a
-    ld [wGb00EmptyPolls], a
-
-    ld hl, wGb00RespBuf
-    ld b, 255 ; GB00_RESP_BUF_SIZE(360) > 255 -- the first call is always capped at 255
-    ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
-    ld [wExecTimeoutFrames], a
-    ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
-    ld [wExecTimeoutFrames + 1], a
-    call MagbTransferData
-    or a, a
-    ret nz
-
-    ld a, [wXferGotLen]
-    ld [wGb00RespLen], a
-    xor a, a
-    ld [wGb00RespLen + 1], a
-
-.pollLoop
-    ld a, [wXferRemoteClosed]
-    or a, a
-    jr nz, .done
-
-    ld a, [wGb00EmptyPolls]
-    cp a, GB00_MAX_EMPTY_POLLS
-    jr nc, .done
-
-    ; remaining (16-bit) = GB00_RESP_BUF_SIZE - wGb00RespLen
-    ld a, [wGb00RespLen]
-    ld e, a
-    ld a, [wGb00RespLen + 1]
-    ld d, a
-    ld hl, GB00_RESP_BUF_SIZE
-    ld a, l
-    sub a, e
-    ld l, a
-    ld a, h
-    sbc a, d
-    ld h, a
-    jr nc, .haveRemaining
-    ld hl, 0
-.haveRemaining
-    ; cap = min(remaining, 255)
-    ld a, h
-    or a, a
-    jr z, .remainderFits
-    ld a, 255
-    jr .haveCap
-.remainderFits
-    ld a, l
-.haveCap
-    or a, a
-    jr z, .done ; buffer full
-    ld b, a ; MagbTransferData's output-capacity input
-
-    ld hl, wGb00RespBuf
-    ld a, [wGb00RespLen]
-    ld e, a
-    ld a, [wGb00RespLen + 1]
-    ld d, a
-    add hl, de
-
-    ld c, 0 ; zero-length send: a poll, not a new send
-    ld a, MAGB_TIMEOUT_FRAMES_LONG & $FF
-    ld [wExecTimeoutFrames], a
-    ld a, MAGB_TIMEOUT_FRAMES_LONG >> 8
-    ld [wExecTimeoutFrames + 1], a
-    call MagbTransferData
-    or a, a
-    ret nz
-
-    ld a, [wXferGotLen]
-    or a, a
-    jr nz, .gotSomething
-    ld a, [wXferRemoteClosed]
-    or a, a
-    jr nz, .skipEmptyCount
-    ld a, [wGb00EmptyPolls]
-    inc a
-    ld [wGb00EmptyPolls], a
-    jr .skipEmptyCount
-.gotSomething
-    xor a, a
-    ld [wGb00EmptyPolls], a
-.skipEmptyCount
-
-    ld a, [wXferGotLen]
-    ld e, a
-    ld d, 0
-    ld hl, wGb00RespLen
-    ld a, [hl]
-    add a, e
-    ld [hl+], a
-    ld a, [hl]
-    adc a, d
-    ld [hl], a
-
-    jr .pollLoop
-
-.done
-    xor a, a
-    ret
 
 sGb00HttpMagic: db "HTTP/" ; compared by fixed 5-byte count, no NUL needed
 
@@ -1621,7 +1487,7 @@ sGb00HttpMagic: db "HTTP/" ; compared by fixed 5-byte count, no NUL needed
 ; Output: A = 1 on success (wGb00FetchStatusText holds the 3 digits,
 ;         NUL-terminated), 0 on failure
 ; Clobbers: everything
-Gb00StatusCode:
+Gb00StatusCode::
     ld a, [wGb00RespLen + 1]
     or a, a
     jr nz, .longEnough ; high byte set -> definitely >= 256 > 12
@@ -1670,7 +1536,7 @@ sGb00Needle: db "WWW-Authenticate:"
 ; Output: A = 1 on success, 0 if not found (or found too close to the
 ;         end of the buffer to hold a full challenge)
 ; Clobbers: everything
-Gb00FindChallenge:
+Gb00FindChallenge::
     ld hl, wGb00RespBuf
     ld a, [wGb00RespLen]
     ld e, a
@@ -1764,197 +1630,3 @@ Gb00FindChallenge:
     xor a, a
     ret
 
-sGb00Status401: db "401" ; compared by fixed 3-byte count, no NUL needed
-sGb00AuthSuffix:
-    db $22, $0D, $0A ; closing quote for the Authorization header value
-    db "Connection: close", $0D, $0A
-    db $0D, $0A
-sGb00AuthSuffixEnd:
-
-; Fetches one URL with REON's GB00 challenge/response auth, matching
-; gbdk's gb00_fetch(): GET with no Authorization; if the response isn't
-; a 401, done (no auth was required for this path). Otherwise finds the
-; WWW-Authenticate challenge, computes the Authorization value, and
-; re-sends the GET with it. Opens its own TCP connection (port 80,
-; hardcoded -- every GB00 target in this ROM is on the same
-; gameboy.datacenter.ne.jp:80) and always closes it before returning, on
-; every exit path -- the caller only owns Begin Session/Dial/ISP
-; Login/DNS Query around one or more calls to this (News Article calls
-; this twice in the same ISP session, one DNS Query shared between
-; them).
-;
-; Input: caller must set, before calling:
-;   wGb00FetchNoAuthPtr/Len     -- the fixed no-auth GET request bytes
-;   wGb00FetchAuthPrefixPtr/Len -- "GET <path> HTTP/1.0\r\nHost: ...\r\n
-;                                  Authorization: GB00 name=\"" (no
-;                                  closing quote/blank line -- this
-;                                  routine appends the computed 92-char
-;                                  value and the shared suffix itself)
-;   wGb00FetchLoginPtr/PasswordPtr -- NUL-terminated strings
-; Output: A = result (0=OK; else a MAGB_ERR_* code from the underlying
-;         TCP/transfer call, or MAGB_ERR_ISP for an app-level parse
-;         failure -- see wGb00FetchFailMsgPtr, valid only in that case).
-;         On success: wGb00FetchStatusText holds the final 3-digit
-;         status, wGb00FetchDidAuth records whether the auth retry
-;         happened.
-; Clobbers: everything
-Gb00FetchOne::
-    xor a, a
-    ld [wGb00FetchDidAuth], a
-
-    ld hl, wDnsResultIp
-    ld bc, 80
-    call MagbTcpOpen
-    or a, a
-    ret nz
-
-    ld a, [wGb00FetchNoAuthPtr]
-    ld e, a
-    ld a, [wGb00FetchNoAuthPtr + 1]
-    ld d, a
-    ld a, [wGb00FetchNoAuthLen]
-    ld c, a
-    call Gb00HttpGetOnce
-    or a, a
-    jr z, .checkStatus
-    push af
-    call MagbTcpClose
-    pop af
-    ret
-
-.checkStatus
-    call Gb00StatusCode
-    or a, a
-    jr nz, .haveStatus
-    call MagbTcpClose
-    ld hl, sGb00NoHttpPrefix
-    ld a, l
-    ld [wGb00FetchFailMsgPtr], a
-    ld a, h
-    ld [wGb00FetchFailMsgPtr + 1], a
-    ld a, MAGB_ERR_ISP
-    ret
-
-.haveStatus
-    ld hl, wGb00FetchStatusText
-    ld de, sGb00Status401
-    ld b, 3
-.cmp401Loop
-    ld a, [de]
-    inc de
-    cp a, [hl]
-    jr nz, .noAuthNeeded
-    inc hl
-    dec b
-    jr nz, .cmp401Loop
-    ; all 3 bytes matched -- status is "401"
-    call Gb00FindChallenge
-    or a, a
-    jr nz, .haveChallenge
-    call MagbTcpClose
-    ld hl, sGb00NoAuthHeader
-    ld a, l
-    ld [wGb00FetchFailMsgPtr], a
-    ld a, h
-    ld [wGb00FetchFailMsgPtr + 1], a
-    ld a, MAGB_ERR_ISP
-    ret
-
-.noAuthNeeded
-    call MagbTcpClose
-    xor a, a
-    ret
-
-.haveChallenge
-    call MagbTcpClose
-
-    ld hl, wGb00FetchChallenge
-    ld a, [wGb00FetchLoginPtr]
-    ld e, a
-    ld a, [wGb00FetchLoginPtr + 1]
-    ld d, a
-    ld a, [wGb00FetchPasswordPtr]
-    ld c, a
-    ld a, [wGb00FetchPasswordPtr + 1]
-    ld b, a
-    call Gb00BuildAuthorization
-
-    ld hl, wDnsResultIp
-    ld bc, 80
-    call MagbTcpOpen
-    or a, a
-    ret nz ; TCP reopen failed -- a real MAGB_ERR_*, PrintErrorCode covers it
-
-    ld hl, wGb00AuthReqBuf
-    ld a, [wGb00FetchAuthPrefixPtr]
-    ld e, a
-    ld a, [wGb00FetchAuthPrefixPtr + 1]
-    ld d, a
-    ld a, [wGb00FetchAuthPrefixLen]
-    ld b, a
-    call .appendReqBytes
-
-    ld de, wGb00Authorization
-    ld b, GB00_AUTHORIZATION_LEN
-    call .appendReqBytes
-
-    ld de, sGb00AuthSuffix
-    ld b, sGb00AuthSuffixEnd - sGb00AuthSuffix
-    call .appendReqBytes
-
-    ld a, [wGb00FetchAuthPrefixLen]
-    add a, GB00_AUTHORIZATION_LEN
-    add a, sGb00AuthSuffixEnd - sGb00AuthSuffix
-    ld [wGb00AuthReqLen], a
-
-    ld de, wGb00AuthReqBuf
-    ld a, [wGb00AuthReqLen]
-    ld c, a
-    call Gb00HttpGetOnce
-    or a, a
-    jr z, .checkAuthStatus
-    push af
-    call MagbTcpClose
-    pop af
-    ret
-
-.checkAuthStatus
-    call MagbTcpClose
-    call Gb00StatusCode
-    or a, a
-    jr nz, .authStatusOk
-    ld hl, sGb00NoHttpPrefixAfterAuth
-    ld a, l
-    ld [wGb00FetchFailMsgPtr], a
-    ld a, h
-    ld [wGb00FetchFailMsgPtr + 1], a
-    ld a, MAGB_ERR_ISP
-    ret
-.authStatusOk
-    ld a, 1
-    ld [wGb00FetchDidAuth], a
-    xor a, a
-    ret
-
-; Appends B bytes from [DE] to the write cursor in HL (advancing both),
-; local to Gb00FetchOne's request-building step above -- not exported,
-; not meant for reuse elsewhere.
-; Input: DE = source, B = length, HL = write cursor (persists across
-;        calls -- the three call sites above build one request in place)
-; Output: HL advanced past the copied bytes
-; Clobbers: A, DE, HL, B
-.appendReqBytes:
-    ld a, b
-    or a, a
-    ret z
-.appendReqLoop
-    ld a, [de]
-    ld [hl+], a
-    inc de
-    dec b
-    jr nz, .appendReqLoop
-    ret
-
-sGb00NoHttpPrefix:          db "NO HTTP/ PREFIX", 0
-sGb00NoAuthHeader:          db "NO WWW-AUTH HDR", 0
-sGb00NoHttpPrefixAfterAuth: db "NO HTTP AFTER AUTH", 0

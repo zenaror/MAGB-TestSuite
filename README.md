@@ -18,7 +18,7 @@ that protocol, not to play a game:
 It contains no Pokémon (or any other) ROM code, game data, or
 copyrighted assets — a clean-room diagnostic client built from publicly
 documented protocol behavior and reverse-engineered/open references
-(see [`CLAUDE.md`](CLAUDE.md)).
+(see [`AGENTS.md`](AGENTS.md)).
 
 ## What it tests
 
@@ -32,12 +32,33 @@ simple text menu on the Game Boy screen:
    POP, ISP dial string).
 3. **ISP / HTTP** — a real ISP dial-up session (Dial → ISP Login → DNS
    → TCP → data transfer → teardown) driving seven targets: an HTTP
-   fetch against REON's real "Mystery Egg" test data, GB00-authenticated
-   news config/article fetches, Mobile Trainer's home page, SMTP send,
-   POP3 receive, and an interactive raw-TCP ("netcat") viewer.
-4. **P2P Caller / Listener (only GBDK, for now)** — two roles of the same test,
-   run as two ROM instances dialing each other directly and exchanging a
+   fetch against REON's real "Mystery Egg" test data; **Small Buffer**
+   and **Big Buffer**, a GB00-authenticated pair carrying synthetic
+   data of 128 bytes and 8 KiB — one arriving in a single Transfer
+   Data, the other streamed and checksummed chunk by chunk, then
+   uploaded back; Mobile Trainer's home page; SMTP send; POP3 receive
+   (which deletes only the messages it sent itself); and an interactive
+   raw-TCP ("netcat") viewer.
+4. **P2P Caller / Listener** — two roles of the same test, run as two
+   ROM instances dialing each other directly and exchanging a
    deterministic binary payload.
+
+5. **Server conformance** — a separate section, deliberately not mixed
+   in with the tests above. Those pass when the adapter, `libmobile` and
+   the link behave; these pass when the *server* is correctly
+   configured, and can fail while the adapter is perfect. One test so
+   far: **Auth Prefix** sends a GB00 credential whose first 44
+   characters are correct and whose remainder is not, and requires the
+   server to refuse it — those 44 characters are only an echo of the
+   challenge the server itself published, so a server that accepts them
+   authenticates anyone who can read a `401`. That was a real defect,
+   found through this suite; see
+   [`gbdk/docs/protocol-notes.md`](gbdk/docs/protocol-notes.md).
+
+The ISP account password is entered on-device and kept in
+battery-backed cartridge SRAM, so it survives a power cycle. It is
+never compiled in: a test that needs authentication refuses to run
+while it is unset rather than sending a guess.
 
 Every test reports `PASS`/`FAIL` plus a specific diagnostic (which
 command, which stage, which error code) — never a fake success. See
@@ -62,8 +83,17 @@ facts rather than a bug in either one:
   TestSuite reports exactly which stage of the chain failed rather than
   shortcutting.
 
-Implementation-specific gaps (e.g. what's not yet confirmed on real
-hardware for `rgbds/`) are listed in that implementation's own README.
+- P2P Caller/Listener works end-to-end on both implementations. On
+  `gbdk/` against real hardware (PicoAdapterGB), which is also how a
+  real disconnect-detection bug in `libmobile` was found and fixed — see
+  [`gbdk/docs/journal.md`](gbdk/docs/journal.md). The `rgbds/` port was
+  confirmed by the project owner in a two-instance run, both roles with
+  `DATA OK`, some time before the device-auth work of September 2026;
+  it has not been re-run since, and nothing that changed touches its
+  path (P2P uses neither GB00 nor the mail authorization gate).
+
+Implementation-specific gaps are listed in that implementation's own
+README.
 
 ## Why GBC-only
 
@@ -83,22 +113,39 @@ TestSuite, each self-contained in its own top-level directory:
 
 | Directory | Language / toolchain | Status |
 | --- | --- | --- |
-| [`gbdk/`](gbdk/) | C, GBDK-2020/SDCC | **Current, working implementation.** Full test coverage, confirmed on real hardware. |
-| [`rgbds/`](rgbds/) | Hand-written SM83 assembly, RGBDS | In progress — feature set now close to `gbdk/`'s; see [`rgbds/docs/status.md`](rgbds/docs/status.md) for exactly what's confirmed. |
+| [`gbdk/`](gbdk/) | C, GBDK-2020/SDCC | Full test coverage; every test runtime-verified. |
+| [`rgbds/`](rgbds/) | Hand-written SM83 assembly, RGBDS | Full test coverage; every test runtime-verified. Per-routine detail in [`rgbds/docs/status.md`](rgbds/docs/status.md). |
 
-Each implementation is independently self-contained: its own build,
-its own tests, its own docs. [`CLAUDE.md`](CLAUDE.md) at the repo root
-covers both — the project brief and protocol references apply to
-either, and it states explicitly which parts are GBDK-specific.
+Neither is a subset of the other. They are kept behaviourally
+identical on purpose: two independent implementations disagreeing about
+the wire format is the cheapest way to find out that one of them is
+wrong.
+
+Want to use the protocol code in your own homebrew rather than run the
+diagnostic ROM? Each side has an integration guide —
+[`gbdk/docs/integration-guide.md`](gbdk/docs/integration-guide.md)
+(start here even for assembly; the protocol reasoning lives there) and
+[`rgbds/docs/integration-guide.md`](rgbds/docs/integration-guide.md).
+
+Each implementation keeps its own build and documentation. Host-side
+protocol tests live under `gbdk/tests/host/`; manual verification and
+implementation-specific limits are documented separately.
+[`AGENTS.md`](AGENTS.md) at the repo root
+covers both — working rules for contributors and AI agents (in
+Portuguese), and it states explicitly which parts are GBDK-specific.
+The original English project brief it replaced, `CLAUDE.md`, is kept in
+the git history (`git show dd8e8fd:CLAUDE.md`); code comments that cite
+its sections refer to that text.
 
 ## Repository layout
 
 ```text
 .
-├── CLAUDE.md          project brief and protocol references (both implementations)
+├── AGENTS.md          working rules for contributors and AI agents (both implementations)
 ├── LICENSE
 ├── config.bin         real captured Mobile Adapter config, provisioned locally (see gbdk/docs/testing.md)
 ├── emulador/           shared local emulator working dir, e.g. a BGB install
+├── server/             REON fixtures the buffer tests need — see server/README.md
 ├── gbdk/               C / GBDK-2020 implementation — see gbdk/README.md
 └── rgbds/              SM83 assembly / RGBDS implementation — see rgbds/README.md
 ```
@@ -107,6 +154,27 @@ either, and it states explicitly which parts are GBDK-specific.
 than duplicated per directory — see
 [`gbdk/docs/testing.md`](gbdk/docs/testing.md) for how each is used
 and provisioned. Neither is part of this repository.
+
+`server/` is: it holds the synthetic REON endpoints the SMALL BUFFER and
+BIG BUFFER tests talk to. They are not needed to build either ROM, only
+to pass those two tests, and they are checked in so the tests are
+reproducible on any REON host rather than on one particular person's —
+see [`server/README.md`](server/README.md).
+
+### Development map
+
+The maintained project is one repository containing both implementations.
+Their existing directories provide the shared responsibilities below;
+there is no separate root `src/`, `docs/` or `tools/` tree to duplicate.
+
+| Responsibility | Canonical location |
+| --- | --- |
+| Working rules and cleanup | [`AGENTS.md`](AGENTS.md); project memory, shared rules and handoff remain exclusively in the central OMM. |
+| Source and interfaces | [`gbdk/src/`](gbdk/src/) and [`gbdk/include/`](gbdk/include/); [`rgbds/src/`](rgbds/src/) and [`rgbds/include/`](rgbds/include/). Each implementation's README describes its layers. |
+| Protocol and integration | [`gbdk/docs/protocol-notes.md`](gbdk/docs/protocol-notes.md), [`gbdk/docs/dandocs-magb.md`](gbdk/docs/dandocs-magb.md), and both [GBDK](gbdk/docs/integration-guide.md) and [RGBDS](rgbds/docs/integration-guide.md) integration guides. |
+| Build, validation and tools | Each implementation's [GBDK](gbdk/README.md) or [RGBDS](rgbds/README.md) README and Makefile. GBDK host tests use `make test`; `make check-banking` uses [`gbdk/tools/check_far_calls.py`](gbdk/tools/check_far_calls.py). Dependencies, captured-fixture limits and manual tests are in [`gbdk/docs/testing.md`](gbdk/docs/testing.md). Build/host checks are distinct from runtime or hardware evidence. |
+| History, remaining work and continuity | [GBDK journal](gbdk/docs/journal.md), [RGBDS journal](rgbds/docs/journal.md) and [`rgbds/docs/status.md`](rgbds/docs/status.md), retaining the dates and limits of their observations. Current coordination and handoff use only the central OMM. |
+| Server fixtures and local inputs | [`server/README.md`](server/README.md) documents the reproducible endpoints. `config.bin`, `emulador/` and read-only `references/` stay local and outside Git. Ignored files can still be unique evidence or private data; follow the cleanup policy before deleting them. |
 
 ## AI assistance
 

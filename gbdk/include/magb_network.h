@@ -87,6 +87,14 @@ magb_result_t magb_transfer_data(magb_context_t *ctx, uint8_t conn_id,
 #define MAGB_CONFIG_SIZE 192U
 #define MAGB_CONFIG_CHUNK (MAGB_CONFIG_SIZE / 2U)
 
+/** Reads the 192-byte configuration in two Read Configuration Data
+ * (0x19) calls of MAGB_CONFIG_CHUNK each.
+ *
+ * Real Mobile Trainer captures show the split is not fixed there
+ * (0x60+0x60 in one session, 0x80+0x40 in another, for the same 192
+ * bytes). This ROM always uses the even split; that observation is
+ * recorded in docs/protocol-notes.md rather than implemented, since
+ * nothing here needs to vary it. */
 magb_result_t magb_read_config(magb_context_t *ctx, uint8_t out[MAGB_CONFIG_SIZE]);
 
 /* Field offsets within the 192-byte configuration blob, per the
