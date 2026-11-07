@@ -2,13 +2,12 @@
 
 A from-scratch, hand-written **SM83 assembly** implementation of the
 Mobile Adapter GB TestSuite, built with [RGBDS](https://rgbds.gbdev.io/),
-a full peer of the [`gbdk/`](../gbdk/) C implementation — the same test
-set, the same results, every test runtime-verified. Neither is the
+a peer of the [`gbdk/`](../gbdk/) C implementation. The implementations
+have the same diagnostic goals and are maintained independently. Neither is the
 "real" one and the other a port. See the repo root
 [`README.md`](../README.md) for what the TestSuite is and what it tests
 in general, and [`docs/status.md`](docs/status.md) in this directory for
-the exhaustive, per-routine list of what's implemented and how each was
-verified.
+the current feature overview and known limitations.
 
 ## Prerequisites
 
@@ -17,9 +16,6 @@ verified.
   real Mobile Adapter GB + flash cart, for manual testing (see
   [`gbdk/docs/testing.md`](../gbdk/docs/testing.md) — the same
   environment serves both implementations).
-- [PyBoy](https://github.com/Baekalfen/PyBoy) (optional) — used during
-  development to unit-test individual routines by redirecting the CPU's
-  PC directly into them; not required to build or run the ROM.
 
 ## Building
 
@@ -55,10 +51,10 @@ xxd -s 0x143 -l 1 build/mobile_adapter_testsuite_rgbds.gbc   # expect: c0       
 xxd -s 0x147 -l 3 build/mobile_adapter_testsuite_rgbds.gbc   # expect: 1b 00 02 (MBC5+RAM+BAT, 32 KiB ROM, 8 KiB RAM)
 ```
 
-There is no host-side (`make test`) unit-test target on this side yet
--- routine-level verification during development is done via PyBoy
-(see [`docs/status.md`](docs/status.md), which documents each routine's
-test cases inline).
+There is currently no host-side (`make test`) unit-test target for this
+implementation. A successful assembly build checks compilation only;
+manual runtime testing is described in
+[`gbdk/docs/testing.md`](../gbdk/docs/testing.md).
 
 ## Architecture
 
@@ -84,11 +80,10 @@ src/main.asm                Layer 3 + entry point: menu, joypad, test sequencing
 
 `gb00_auth.asm`, `net_extra.asm` and `big_buffer.asm` live in `ROMX,
 BANK[1]` rather than `ROM0`. Everything else did originally, which
-meant the entire upper half of the physical 32 KiB ROM sat unused until
-GB00/Email needed the room (see `docs/status.md`'s "GB00 authentication
-primitives"). Bank 1 is the only ROMX bank and nothing here ever writes
-a bank number, so it is simply the always-mapped upper 16 KiB — adding
-a second bank would change that.
+means the upper half of the physical 32 KiB ROM holds the larger
+authentication, email, and buffer-test modules. Bank 1 is the only ROMX
+bank and nothing here writes a bank number, so it is simply the
+always-mapped upper 16 KiB.
 
 Want to use this protocol code in your own homebrew, not just run this
 diagnostic ROM? [`docs/integration-guide.md`](docs/integration-guide.md)
@@ -100,20 +95,22 @@ alongside it — the protocol reasoning is written once, there.
 
 ## Known limitations
 
-- No 16-bit-to-decimal formatting routine yet, so HTTP GET does not show
-  the exact received byte count the way `gbdk/`'s equivalent screen does
-  (`RX TOTAL %u B`) -- a display-only gap, not a protocol one.
-- If an early ISP/HTTP command (Dial, ISP Login, DNS, TCP Open, HTTP
-  GET itself) fails, this ROM stops immediately rather than attempting
-  `gbdk/`'s full best-effort teardown chain (TCP Close → ISP Logout →
-  Hang Up → End Session) the way a later-stage failure already does.
-- On a non-CGB console `SerialHwInit` halts without showing anything,
-  since no font is loaded that early. `gbdk/`'s equivalent prints an
-  explanation. See the integration guide.
+- Early ISP/HTTP failures stop without attempting the full teardown
+  sequence (TCP Close, ISP Logout, Hang Up, End Session).
+- HTTP results do not display a 16-bit total received-byte count.
+- Writing adapter configuration (`0x1A`) is not implemented.
+- The built-in font covers ASCII `$20` through `$7A`; later punctuation
+  is unavailable.
+- Email `STAT` parsing and decimal formatting use 8-bit values, so
+  counts above 255 are not represented safely.
+- `MagbDial` and `MagbTcpOpen` rely on their current fixed-length call
+  sites and do not validate a runtime-provided digit count.
+- On non-CGB hardware, serial initialization halts without displaying
+  an explanatory message.
 
-See [`docs/status.md`](docs/status.md)'s "Known simplifications" and
-"What's explicitly NOT implemented yet" sections for the complete,
-current list.
+See [`docs/status.md`](docs/status.md) for the concise feature overview
+and limitations; `docs/integration-guide.md` describes the interfaces
+for developers using the protocol modules.
 
 ## License
 

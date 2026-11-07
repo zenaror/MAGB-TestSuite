@@ -14,7 +14,8 @@ only exist in assembly.
 Both sides now cover the same ground: session, dial, ISP, DNS, TCP,
 Transfer Data, config readout, P2P, GB00 auth, SMTP/POP3, and a
 battery-backed save. Neither is a subset of the other any more. See
-[`docs/status.md`](status.md) for the exhaustive per-routine state.
+[`docs/status.md`](status.md) for the current feature overview and known
+limitations.
 
 ---
 

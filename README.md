@@ -83,14 +83,10 @@ facts rather than a bug in either one:
   TestSuite reports exactly which stage of the chain failed rather than
   shortcutting.
 
-- P2P Caller/Listener works end-to-end on both implementations. On
-  `gbdk/` against real hardware (PicoAdapterGB), which is also how a
-  real disconnect-detection bug in `libmobile` was found and fixed — see
-  [`gbdk/docs/journal.md`](gbdk/docs/journal.md). The `rgbds/` port was
-  confirmed by the project owner in a two-instance run, both roles with
-  `DATA OK`, some time before the device-auth work of September 2026;
-  it has not been re-run since, and nothing that changed touches its
-  path (P2P uses neither GB00 nor the mail authorization gate).
+- Both implementations include P2P Caller/Listener checks. Runtime
+  behavior depends on the adapter/emulator and linked peer; use the
+  manual procedures in the implementation documentation and report
+  results only for environments that were actually tested.
 
 Implementation-specific gaps are listed in that implementation's own
 README.
@@ -113,8 +109,8 @@ TestSuite, each self-contained in its own top-level directory:
 
 | Directory | Language / toolchain | Status |
 | --- | --- | --- |
-| [`gbdk/`](gbdk/) | C, GBDK-2020/SDCC | Full test coverage; every test runtime-verified. |
-| [`rgbds/`](rgbds/) | Hand-written SM83 assembly, RGBDS | Full test coverage; every test runtime-verified. Per-routine detail in [`rgbds/docs/status.md`](rgbds/docs/status.md). |
+| [`gbdk/`](gbdk/) | C, GBDK-2020/SDCC | Full diagnostic suite; build and runtime validation are reported separately. |
+| [`rgbds/`](rgbds/) | Hand-written SM83 assembly, RGBDS | Independent implementation; see its [feature overview and limits](rgbds/docs/status.md). |
 
 Neither is a subset of the other. They are kept behaviourally
 identical on purpose: two independent implementations disagreeing about
@@ -128,11 +124,11 @@ diagnostic ROM? Each side has an integration guide —
 [`rgbds/docs/integration-guide.md`](rgbds/docs/integration-guide.md).
 
 Each implementation keeps its own build and documentation. Host-side
-protocol tests live under `gbdk/tests/host/`; manual verification and
-implementation-specific limits are documented separately.
+protocol tests live under `gbdk/tests/host/`; runtime testing procedures
+and implementation-specific limitations are documented separately.
 [`AGENTS.md`](AGENTS.md) at the repo root
-covers both — working rules for contributors and AI agents (in
-Portuguese), and it states explicitly which parts are GBDK-specific.
+covers the shared contributor rules and the distinction between the two
+implementations.
 The original English project brief it replaced, `CLAUDE.md`, is kept in
 the git history (`git show dd8e8fd:CLAUDE.md`); code comments that cite
 its sections refer to that text.
@@ -169,12 +165,12 @@ there is no separate root `src/`, `docs/` or `tools/` tree to duplicate.
 
 | Responsibility | Canonical location |
 | --- | --- |
-| Working rules and cleanup | [`AGENTS.md`](AGENTS.md); project memory, shared rules and handoff remain exclusively in the central OMM. |
+| Contributor guidance | [`AGENTS.md`](AGENTS.md) and this README. |
 | Source and interfaces | [`gbdk/src/`](gbdk/src/) and [`gbdk/include/`](gbdk/include/); [`rgbds/src/`](rgbds/src/) and [`rgbds/include/`](rgbds/include/). Each implementation's README describes its layers. |
 | Protocol and integration | [`gbdk/docs/protocol-notes.md`](gbdk/docs/protocol-notes.md), [`gbdk/docs/dandocs-magb.md`](gbdk/docs/dandocs-magb.md), and both [GBDK](gbdk/docs/integration-guide.md) and [RGBDS](rgbds/docs/integration-guide.md) integration guides. |
 | Build, validation and tools | Each implementation's [GBDK](gbdk/README.md) or [RGBDS](rgbds/README.md) README and Makefile. GBDK host tests use `make test`; `make check-banking` uses [`gbdk/tools/check_far_calls.py`](gbdk/tools/check_far_calls.py). Dependencies, captured-fixture limits and manual tests are in [`gbdk/docs/testing.md`](gbdk/docs/testing.md). Build/host checks are distinct from runtime or hardware evidence. |
-| History, remaining work and continuity | [GBDK journal](gbdk/docs/journal.md), [RGBDS journal](rgbds/docs/journal.md) and [`rgbds/docs/status.md`](rgbds/docs/status.md), retaining the dates and limits of their observations. Current coordination and handoff use only the central OMM. |
-| Server fixtures and local inputs | [`server/README.md`](server/README.md) documents the reproducible endpoints. `config.bin`, `emulador/` and read-only `references/` stay local and outside Git. Ignored files can still be unique evidence or private data; follow the cleanup policy before deleting them. |
+| Implementation status and limits | Each implementation README and, for RGBDS, [`rgbds/docs/status.md`](rgbds/docs/status.md). |
+| Server fixtures and local inputs | [`server/README.md`](server/README.md) documents the reproducible endpoints. `config.bin`, `emulador/` and read-only `references/` are provisioned locally and are not part of this repository. |
 
 ## AI assistance
 
